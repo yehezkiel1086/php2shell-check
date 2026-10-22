@@ -1,7 +1,7 @@
 # Binaries
-bin/
-php2shell-check
-php2shell-check.exe
+/bin/
+/php2shell-check
+/php2shell-check.exe
 *.exe
 *.exe~
 *.dll
