@@ -1,0 +1,26 @@
+# Binaries
+bin/
+php2shell-check
+php2shell-check.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Go workspace file
+go.work
+go.work.sum
+
+# IDE / OS files
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db
