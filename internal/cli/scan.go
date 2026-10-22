@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
+	"github.com/yehezkiel1086/php2shell-check/internal/detect/image"
 	"github.com/yehezkiel1086/php2shell-check/internal/detect/local"
 	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 	"github.com/yehezkiel1086/php2shell-check/internal/match"
@@ -22,7 +23,7 @@ func newScanCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 
 	scanCmd.AddCommand(
 		newScanLocalCmd(opts, info),
-		newScanImageCmd(opts),
+		newScanImageCmd(opts, info),
 		newScanSBOMCmd(opts),
 		newScanPathCmd(opts),
 		newScanRemoteCmd(opts),
@@ -89,12 +90,26 @@ func evaluateAndRenderScan(
 	return nil
 }
 
-func newScanImageCmd(_ *GlobalOptions) *cobra.Command {
+func newScanImageCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 	return &cobra.Command{
-		Use:   "image [IMAGE_OR_TAR]",
+		Use:   "image <ref|tarball|oci-dir>",
 		Short: "Scan a container image or archive for PHP installations (read-only, no binary execution)",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return fmt.Errorf("scan image: %w", ErrNotImplemented)
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			adv, err := advisory.Load(opts.AdvisoryFile)
+			if err != nil {
+				return fmt.Errorf("scan image load advisory: %w", err)
+			}
+
+			collector := image.NewCollector(image.Options{
+				Offline: opts.Offline,
+			})
+			installs, err := collector.Collect(cmd.Context(), args[0])
+			if err != nil {
+				return fmt.Errorf("scan image %q: %w", args[0], err)
+			}
+
+			return evaluateAndRenderScan(cmd, opts, info, "image", installs, adv)
 		},
 	}
 }

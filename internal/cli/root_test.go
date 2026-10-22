@@ -59,7 +59,6 @@ func TestStubCommandsReturnNotImplemented(t *testing.T) {
 	t.Parallel()
 
 	stubs := [][]string{
-		{"scan", "image", "php:8.3-fpm"},
 		{"scan", "sbom", "bom.json"},
 		{"scan", "path", "/var/www"},
 		{"scan", "remote", "--authorized", "https://example.com"},
