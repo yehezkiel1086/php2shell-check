@@ -1,0 +1,17 @@
+Priority: P0
+Title:    [P0] Remediate /usr/sbin/php-fpm8.3 (LIKELY_VULNERABLE, SAPI: fpm)
+Steps:
+  1. Upgrade PHP on branch 8.3 to >= 8.3.36.
+  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+     --- a/php.ini
+     +++ b/php.ini
+     -session.upload_progress.enabled = 1
+     +session.upload_progress.enabled = 0
+     --- a/pool.d/www.conf
+     +++ b/pool.d/www.conf
+     +php_admin_value[session.upload_progress.enabled] = 0
+Commands:
+  [Upgrade Debian/Ubuntu package] apt-get install --only-upgrade php8.3-fpm
+Restart Hints:
+  - reload php-fpm (e.g. systemctl reload php-fpm)
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
