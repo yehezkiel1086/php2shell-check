@@ -1,0 +1,25 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "php8.3-fpm",
+      "version": "8.3.35-1+deb12u1",
+      "purl": "pkg:deb/debian/php8.3-fpm@8.3.35-1+deb12u1?arch=amd64&distro=debian-12"
+    },
+    {
+      "type": "library",
+      "name": "libapache2-mod-php8.2",
+      "version": "8.2.34-1ubuntu2.1",
+      "purl": "pkg:deb/ubuntu/libapache2-mod-php8.2@8.2.34-1ubuntu2.1?distro=ubuntu-22.04"
+    },
+    {
+      "type": "library",
+      "name": "openssl",
+      "version": "3.0.11-1~deb12u2",
+      "purl": "pkg:deb/debian/openssl@3.0.11-1~deb12u2"
+    }
+  ]
+}

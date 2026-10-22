@@ -20,6 +20,7 @@ require (
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
+	github.com/package-url/packageurl-go v0.1.7 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	golang.org/x/sync v0.22.0 // indirect
