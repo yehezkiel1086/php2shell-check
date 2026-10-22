@@ -14,6 +14,7 @@ import (
 	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
 	"github.com/yehezkiel1086/php2shell-check/internal/detect/local"
 	"github.com/yehezkiel1086/php2shell-check/internal/match"
+	"github.com/yehezkiel1086/php2shell-check/internal/remediate"
 )
 
 func newScanCmd(opts *GlobalOptions) *cobra.Command {
@@ -52,7 +53,8 @@ func newScanLocalCmd(opts *GlobalOptions) *cobra.Command {
 			}
 
 			findings := match.EvaluateAll(installs, adv)
-			if writeErr := writeFindingsOutput(cmd, opts, findings); writeErr != nil {
+			recs := remediate.BuildAll(findings, adv, remediate.Options{IncludeHuntHints: opts.Hunt})
+			if writeErr := writeFindingsOutput(cmd, opts, findings, recs); writeErr != nil {
 				return writeErr
 			}
 
@@ -69,7 +71,7 @@ func newScanLocalCmd(opts *GlobalOptions) *cobra.Command {
 	}
 }
 
-func writeFindingsOutput(cmd *cobra.Command, opts *GlobalOptions, findings []match.Finding) error {
+func writeFindingsOutput(cmd *cobra.Command, opts *GlobalOptions, findings []match.Finding, recs []remediate.Recommendation) error {
 	format, err := ParseOutputFormat(opts.Format)
 	if err != nil {
 		return err
@@ -88,7 +90,7 @@ func writeFindingsOutput(cmd *cobra.Command, opts *GlobalOptions, findings []mat
 			return fmt.Errorf("encode findings JSON: %w", err)
 		}
 	case FormatTable, FormatMD, FormatSARIF:
-		if err := renderFindingsTable(&buf, findings); err != nil {
+		if err := renderFindingsTable(&buf, findings, recs, opts.Hunt); err != nil {
 			return fmt.Errorf("render findings table: %w", err)
 		}
 	}
@@ -106,9 +108,12 @@ func writeFindingsOutput(cmd *cobra.Command, opts *GlobalOptions, findings []mat
 	return nil
 }
 
-func renderFindingsTable(buf *bytes.Buffer, findings []match.Finding) error {
+func renderFindingsTable(buf *bytes.Buffer, findings []match.Finding, recs []remediate.Recommendation, includeHunt bool) error {
 	if len(findings) == 0 {
 		_, _ = fmt.Fprintln(buf, "No PHP installations discovered.")
+		if includeHunt {
+			renderHuntSection(buf)
+		}
 		return nil
 	}
 
@@ -139,7 +144,29 @@ func renderFindingsTable(buf *bytes.Buffer, findings []match.Finding) error {
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("flush findings table: %w", err)
 	}
+
+	if len(recs) > 0 {
+		_, _ = fmt.Fprintln(buf, "\nRemediation Guidance:")
+		for i, rec := range recs {
+			if i > 0 {
+				_, _ = fmt.Fprintln(buf)
+			}
+			_, _ = fmt.Fprint(buf, remediate.FormatText(rec))
+		}
+	}
+
+	if includeHunt {
+		renderHuntSection(buf)
+	}
+
 	return nil
+}
+
+func renderHuntSection(buf *bytes.Buffer) {
+	_, _ = fmt.Fprintln(buf, "\nLog-Review Indicators (--hunt):")
+	for _, h := range remediate.HuntHints() {
+		_, _ = fmt.Fprintf(buf, "  - %s\n", h)
+	}
 }
 
 func formatMitigationMap(m map[string]match.MitigationStatus) string {

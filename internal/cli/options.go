@@ -38,6 +38,7 @@ type GlobalOptions struct {
 	Quiet        bool
 	NoColor      bool
 	AdvisoryFile string
+	Hunt         bool
 }
 
 // Validate checks that the global option values are valid.

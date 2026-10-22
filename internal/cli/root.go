@@ -69,6 +69,7 @@ func NewRootCmd(info BuildInfo) (*cobra.Command, *GlobalOptions) {
 	pf.BoolVar(&opts.Quiet, "quiet", false, "Suppress non-essential output")
 	pf.BoolVar(&opts.NoColor, "no-color", false, "Disable ANSI color output")
 	pf.StringVar(&opts.AdvisoryFile, "advisory-file", "", "Path to custom advisories JSON file")
+	pf.BoolVar(&opts.Hunt, "hunt", false, "Include passive log-review indicators for known PHP2Shell samples")
 
 	rootCmd.AddCommand(
 		newScanCmd(opts),
