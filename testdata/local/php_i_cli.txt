@@ -1,0 +1,28 @@
+phpinfo()
+PHP Version => 8.3.35
+
+System => Linux web01 6.1.0-25-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.106-3 (2026-08-26) x86_64
+Build Date => Oct 10 2026 14:22:11
+Server API => Command Line Interface
+Virtual Directory Support => disabled
+Configuration File (php.ini) Path => /etc/php/8.3/cli
+Loaded Configuration File => /etc/php/8.3/cli/php.ini
+Scan this dir for additional .ini files => /etc/php/8.3/cli/conf.d
+Additional .ini files parsed => /etc/php/8.3/cli/conf.d/10-opcache.ini,
+/etc/php/8.3/cli/conf.d/99-hardening.ini
+
+Core
+
+PHP Version => 8.3.35
+
+Directive => Local Value => Master Value
+expose_php => Off => Off
+fatal_error_backtraces => On => On
+
+session
+
+Session Support => enabled
+Directive => Local Value => Master Value
+session.upload_progress.cleanup => On => On
+session.upload_progress.enabled => Off => Off
+session.upload_progress.freq => 1% => 1%

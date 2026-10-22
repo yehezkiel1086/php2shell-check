@@ -1,0 +1,1 @@
+FrankenPHP v1.3.0 PHP 8.4.26 Caddy v2.8.4
