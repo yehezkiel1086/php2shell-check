@@ -64,7 +64,6 @@ func TestStubCommandsReturnNotImplemented(t *testing.T) {
 		{"scan", "sbom", "bom.json"},
 		{"scan", "path", "/var/www"},
 		{"scan", "remote", "--authorized", "https://example.com"},
-		{"advisories", "list"},
 	}
 
 	for _, args := range stubs {
@@ -80,6 +79,34 @@ func TestStubCommandsReturnNotImplemented(t *testing.T) {
 				t.Fatalf("Run(%v) stderr = %q, want substring %q", args, stderr.String(), cli.ErrNotImplemented.Error())
 			}
 		})
+	}
+}
+
+func TestAdvisoriesListCommand(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run(context.Background(), cli.BuildInfo{Version: "0.1.0"}, []string{"advisories", "list"}, &stdout, &stderr)
+	if code != cli.ExitCodeClean {
+		t.Fatalf("advisories list exit code = %d, want %d (stderr: %s)", code, cli.ExitCodeClean, stderr.String())
+	}
+
+	out := stdout.String()
+	wantSubstrings := []string{
+		"CVE-2026-109618",
+		"CVE-2026-109619",
+		"5.4.0 .. 8.5.11",
+		"8.5.12",
+		"8.4.27",
+		"8.3.36",
+		"8.2.35",
+		"session.upload_progress.enabled",
+		"fatal_error_backtraces",
+	}
+	for _, sub := range wantSubstrings {
+		if !strings.Contains(out, sub) {
+			t.Errorf("advisories list output missing %q\noutput:\n%s", sub, out)
+		}
 	}
 }
 
