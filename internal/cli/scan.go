@@ -8,6 +8,9 @@ import (
 	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
 	"github.com/yehezkiel1086/php2shell-check/internal/detect/image"
 	"github.com/yehezkiel1086/php2shell-check/internal/detect/local"
+	"github.com/yehezkiel1086/php2shell-check/internal/detect/path"
+	"github.com/yehezkiel1086/php2shell-check/internal/detect/remote"
+	"github.com/yehezkiel1086/php2shell-check/internal/detect/sbom"
 	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 	"github.com/yehezkiel1086/php2shell-check/internal/match"
 	"github.com/yehezkiel1086/php2shell-check/internal/remediate"
@@ -24,9 +27,9 @@ func newScanCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 	scanCmd.AddCommand(
 		newScanLocalCmd(opts, info),
 		newScanImageCmd(opts, info),
-		newScanSBOMCmd(opts),
-		newScanPathCmd(opts),
-		newScanRemoteCmd(opts),
+		newScanSBOMCmd(opts, info),
+		newScanPathCmd(opts, info),
+		newScanRemoteCmd(opts, info),
 	)
 
 	return scanCmd
@@ -114,35 +117,89 @@ func newScanImageCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 	}
 }
 
-func newScanSBOMCmd(_ *GlobalOptions) *cobra.Command {
+func newScanSBOMCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 	return &cobra.Command{
-		Use:   "sbom [FILE]",
-		Short: "Scan an SBOM (CycloneDX or SPDX) for PHP packages",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return fmt.Errorf("scan sbom: %w", ErrNotImplemented)
+		Use:   "sbom <FILE>",
+		Short: "Scan an SBOM (CycloneDX or SPDX JSON) for PHP packages",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			adv, err := advisory.Load(opts.AdvisoryFile)
+			if err != nil {
+				return fmt.Errorf("scan sbom load advisory: %w", err)
+			}
+
+			collector := sbom.NewCollector()
+			installs, err := collector.Collect(cmd.Context(), args[0])
+			if err != nil {
+				return fmt.Errorf("scan sbom %q: %w", args[0], err)
+			}
+
+			return evaluateAndRenderScan(cmd, opts, info, "sbom", installs, adv)
 		},
 	}
 }
 
-func newScanPathCmd(_ *GlobalOptions) *cobra.Command {
-	return &cobra.Command{
+func newScanPathCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
+	var exclude []string
+
+	cmd := &cobra.Command{
 		Use:   "path [DIR]",
-		Short: "Scan a filesystem path or rootfs directory for PHP installations",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return fmt.Errorf("scan path: %w", ErrNotImplemented)
+		Short: "Scan a filesystem path or repository directory for PHP manifests and version files",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targetDir := "."
+			if len(args) == 1 {
+				targetDir = args[0]
+			}
+
+			adv, err := advisory.Load(opts.AdvisoryFile)
+			if err != nil {
+				return fmt.Errorf("scan path load advisory: %w", err)
+			}
+
+			collector := path.NewCollector(path.Options{
+				RootPath: targetDir,
+				Exclude:  exclude,
+			})
+			installs, err := collector.Collect(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("scan path %q: %w", targetDir, err)
+			}
+
+			return evaluateAndRenderScan(cmd, opts, info, "path", installs, adv)
 		},
 	}
+
+	cmd.Flags().StringSliceVar(&exclude, "exclude", nil, "Glob or directory patterns to exclude when walking the path")
+	return cmd
 }
 
-func newScanRemoteCmd(_ *GlobalOptions) *cobra.Command {
+func newScanRemoteCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 	var authorized bool
 
 	cmd := &cobra.Command{
-		Use:   "remote [URL]",
-		Short: "Passively inspect HTTP response headers of a remote target (requires --authorized)",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			_ = authorized
-			return fmt.Errorf("scan remote: %w", ErrNotImplemented)
+		Use:   "remote <URL> [URL...]",
+		Short: "Passively inspect HTTP response headers of remote targets (requires --authorized)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.Offline {
+				return fmt.Errorf("scan remote: cannot run remote scan when --offline is enabled")
+			}
+
+			adv, err := advisory.Load(opts.AdvisoryFile)
+			if err != nil {
+				return fmt.Errorf("scan remote load advisory: %w", err)
+			}
+
+			collector := remote.NewCollector(remote.Options{
+				Authorized: authorized,
+				Targets:    args,
+			})
+			installs, err := collector.Collect(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("scan remote: %w", err)
+			}
+
+			return evaluateAndRenderScan(cmd, opts, info, "remote", installs, adv)
 		},
 	}
 

@@ -81,10 +81,14 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 	refs := append([]advisory.Reference(nil), adv.References...)
 
 	if f.Verdict == match.VerdictPatched {
+		steps := []string{"Installation meets or exceeds the patched version threshold."}
+		if f.Install.Source == inventory.SourceRemote {
+			steps = append(steps, "Extra hardening: set expose_php = Off in php.ini to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
+		}
 		rec := Recommendation{
 			Priority:   PriorityP3,
 			Title:      fmt.Sprintf("No remediation required for %s (PATCHED)", targetDisplayName(f.Install)),
-			Steps:      []string{"Installation meets or exceeds the patched version threshold."},
+			Steps:      steps,
 			References: refs,
 		}
 		if opts.IncludeHuntHints {
@@ -94,13 +98,33 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 	}
 
 	if f.Verdict == match.VerdictUnknown {
+		steps := []string{
+			"verify manually: inspect the PHP binary version, SAPI configuration, and vendor changelog.",
+		}
+		var cmds []Command
+		if f.Install.Source == inventory.SourcePath {
+			pinTarget := f.FixedIn
+			if pinTarget == "" {
+				_, pinTarget = deriveHighestFixedIn(adv)
+			}
+			if pinTarget != "" {
+				steps = append(steps, fmt.Sprintf("Floating constraint or tag %q cannot prove a patched version: pin to FixedIn version %s or scan the resolved image digest.", f.Install.UpstreamVersion, pinTarget))
+			} else {
+				steps = append(steps, fmt.Sprintf("Floating constraint or tag %q cannot prove a patched version: pin to the FixedIn version or scan the resolved image digest.", f.Install.UpstreamVersion))
+			}
+			cmds, _ = buildCommands(f.Install, pinTarget)
+		}
+		if f.Install.Source == inventory.SourceRemote {
+			steps = append(steps, "Extra hardening: set expose_php = Off in php.ini to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
+		}
+		if diffStep := buildMitigationDiffStep(f.Install, "", adv); diffStep != "" {
+			steps = append(steps, diffStep)
+		}
 		rec := Recommendation{
-			Priority: PriorityP3,
-			Title:    fmt.Sprintf("Verify PHP installation manually for %s", targetDisplayName(f.Install)),
-			Steps: []string{
-				"verify manually: inspect the PHP binary version, SAPI configuration, and vendor changelog.",
-				buildMitigationDiffStep(f.Install, "", adv),
-			},
+			Priority:     PriorityP3,
+			Title:        fmt.Sprintf("Verify PHP installation manually for %s", targetDisplayName(f.Install)),
+			Steps:        steps,
+			Commands:     cmds,
 			RestartHints: restartHintsForSAPI(f.Install.SAPI),
 			Notes:        MitigationWarning,
 			References:   refs,
@@ -119,6 +143,9 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 	mitigationStep := buildMitigationDiffStep(f.Install, branch, adv)
 
 	steps := []string{upgradeStep}
+	if f.Install.Source == inventory.SourceRemote {
+		steps = append(steps, "Extra hardening: set expose_php = Off in php.ini to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
+	}
 	if mitigationStep != "" {
 		steps = append(steps, mitigationStep)
 	}
@@ -252,8 +279,8 @@ func buildCommands(inst inventory.PHPInstall, targetVersion string) ([]Command, 
 		return cmds, ""
 	}
 
-	// 2. Check for container image source.
-	if inst.Source == inventory.SourceImage {
+	// 2. Check for container image source or container manifest in path mode.
+	if inst.Source == inventory.SourceImage || (inst.Source == inventory.SourcePath && inst.PackageManager == "container") {
 		if targetVersion != "" {
 			if err := ValidatePackageToken(strings.ToLower(targetVersion)); err != nil {
 				notes = append(notes, fmt.Sprintf("Rejected unsafe target version %q from command output.", targetVersion))

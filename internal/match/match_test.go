@@ -673,3 +673,35 @@ func TestAggregationSeverityOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestPathAndRemoteSourceVerdicts(t *testing.T) {
+	t.Parallel()
+
+	seedAdv := mustLoadSeedAdvisory(t)
+
+	// Path mode floating tag -> UNKNOWN with FixedIn populated
+	pathFloating := match.Evaluate(inventory.PHPInstall{
+		UpstreamVersion: "php:8.3-fpm",
+		Source:          inventory.SourcePath,
+		Confidence:      inventory.ConfidenceMedium,
+	}, seedAdv)
+	if pathFloating.Verdict != match.VerdictUnknown {
+		t.Errorf("pathFloating.Verdict = %q, want UNKNOWN", pathFloating.Verdict)
+	}
+	if pathFloating.FixedIn != "8.3.36" {
+		t.Errorf("pathFloating.FixedIn = %q, want 8.3.36", pathFloating.FixedIn)
+	}
+
+	// Remote mode banner < FixedIn -> capped at LIKELY_VULNERABLE (never VULNERABLE) and labeled
+	remoteBelow := match.Evaluate(inventory.PHPInstall{
+		UpstreamVersion: "8.3.10",
+		Source:          inventory.SourceRemote,
+		Confidence:      inventory.ConfidenceLow,
+	}, seedAdv)
+	if remoteBelow.Verdict != match.VerdictLikelyVulnerable {
+		t.Errorf("remoteBelow.Verdict = %q, want LIKELY_VULNERABLE", remoteBelow.Verdict)
+	}
+	if remoteBelow.Reason == "" {
+		t.Error("remoteBelow.Reason should not be empty")
+	}
+}

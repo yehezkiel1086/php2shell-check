@@ -292,3 +292,34 @@ func TestHuntHintsIncludedWhenEnabled(t *testing.T) {
 		}
 	}
 }
+
+func TestPathAndRemoteRemediationGuidance(t *testing.T) {
+	t.Parallel()
+
+	adv := mustLoadSeedAdvisory(t)
+
+	pathFinding := match.Evaluate(inventory.PHPInstall{
+		BinaryPath:      "Dockerfile:2",
+		UpstreamVersion: "php:8.3-fpm",
+		PackageManager:  "container",
+		Source:          inventory.SourcePath,
+		Confidence:      inventory.ConfidenceMedium,
+	}, adv)
+	pathRec := remediate.Build(pathFinding, adv, remediate.Options{})
+	pathText := remediate.FormatText(pathRec)
+	if !strings.Contains(pathText, "8.3.36") || !strings.Contains(pathText, "scan the resolved image digest") {
+		t.Errorf("path remediation missing pin/digest guidance:\n%s", pathText)
+	}
+
+	remoteFinding := match.Evaluate(inventory.PHPInstall{
+		BinaryPath:      "https://example.com/",
+		UpstreamVersion: "8.3.10",
+		Source:          inventory.SourceRemote,
+		Confidence:      inventory.ConfidenceLow,
+	}, adv)
+	remoteRec := remediate.Build(remoteFinding, adv, remediate.Options{})
+	remoteText := remediate.FormatText(remoteRec)
+	if !strings.Contains(remoteText, "expose_php = Off") {
+		t.Errorf("remote remediation missing expose_php=Off hardening:\n%s", remoteText)
+	}
+}

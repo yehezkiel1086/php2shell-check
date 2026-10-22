@@ -2,6 +2,7 @@ package match
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -9,6 +10,11 @@ import (
 	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 	"github.com/yehezkiel1086/php2shell-check/internal/phpver"
 )
+
+// BannerCaveat is the required label noting that remote HTTP banners are low-confidence.
+const BannerCaveat = "banner, may be hidden or spoofed"
+
+var floatingBranchRe = regexp.MustCompile(`(\d+\.\d+)`)
 
 // Verdict represents the assessment verdict for a discovered PHP installation.
 type Verdict string
@@ -123,18 +129,28 @@ func Evaluate(inst inventory.PHPInstall, adv advisory.Advisory) Finding {
 
 	upstreamVer, err := phpver.Parse(inst.UpstreamVersion)
 	if err != nil {
+		reason, fixedIn, hintedBranch := evaluateUnparseableVersion(inst, adv)
 		return Finding{
 			AdvisoryID: adv.ID,
 			CVEs:       cves,
 			Install:    inst,
 			Verdict:    VerdictUnknown,
-			Reason:     fmt.Sprintf("unparseable upstream PHP version %q", inst.UpstreamVersion),
-			Mitigation: evaluateMitigations(inst, "", adv),
+			Reason:     reason,
+			FixedIn:    fixedIn,
+			Mitigation: evaluateMitigations(inst, hintedBranch, adv),
 		}
 	}
 
 	mitigations := evaluateMitigations(inst, upstreamVer.Branch, adv)
 	verdict, reason, fixedIn := evaluateVerdict(inst, upstreamVer, adv)
+	if inst.Source == inventory.SourceRemote {
+		if verdict == VerdictVulnerable {
+			verdict = VerdictLikelyVulnerable
+		}
+		if !strings.Contains(reason, BannerCaveat) {
+			reason = fmt.Sprintf("%s (%s)", reason, BannerCaveat)
+		}
+	}
 
 	return Finding{
 		AdvisoryID: adv.ID,
@@ -145,6 +161,29 @@ func Evaluate(inst inventory.PHPInstall, adv advisory.Advisory) Finding {
 		FixedIn:    fixedIn,
 		Mitigation: mitigations,
 	}
+}
+
+func evaluateUnparseableVersion(inst inventory.PHPInstall, adv advisory.Advisory) (string, string, string) {
+	if inst.Source == inventory.SourceRemote {
+		return fmt.Sprintf("unparseable or unexposed remote PHP version %q (%s)", inst.UpstreamVersion, BannerCaveat), "", ""
+	}
+	if inst.Source == inventory.SourcePath {
+		hintedBranch := ""
+		if m := floatingBranchRe.FindStringSubmatch(inst.UpstreamVersion); len(m) == 2 {
+			hintedBranch = m[1]
+		}
+		fixedIn := ""
+		if hintedBranch != "" {
+			if b, ok := findBranchAdvisory(hintedBranch, adv.Branches); ok && hasVerifiedUpstreamFix(b) {
+				fixedIn = b.FixedIn
+			}
+		}
+		if fixedIn != "" {
+			return fmt.Sprintf("floating version constraint or tag %q cannot prove a patched version; pin to %s or scan the resolved image digest", inst.UpstreamVersion, fixedIn), fixedIn, hintedBranch
+		}
+		return fmt.Sprintf("floating version constraint or tag %q cannot prove a patched version; pin to FixedIn version or scan the resolved image digest", inst.UpstreamVersion), "", hintedBranch
+	}
+	return fmt.Sprintf("unparseable upstream PHP version %q", inst.UpstreamVersion), "", ""
 }
 
 func evaluateVerdict(inst inventory.PHPInstall, upstreamVer phpver.Version, adv advisory.Advisory) (Verdict, string, string) {
