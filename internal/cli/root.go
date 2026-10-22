@@ -12,6 +12,14 @@ import (
 // ErrNotImplemented is returned by command stubs that have not been implemented yet.
 var ErrNotImplemented = errors.New("not implemented yet")
 
+type findingExitError struct {
+	code int
+}
+
+func (e *findingExitError) Error() string {
+	return fmt.Sprintf("findings triggered exit code %d", e.code)
+}
+
 // BuildInfo holds version and build metadata injected via linker flags.
 type BuildInfo struct {
 	Version string
@@ -80,6 +88,10 @@ func Run(ctx context.Context, info BuildInfo, args []string, stdout, stderr io.W
 	rootCmd.SetArgs(args)
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		var exitErr *findingExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.code
+		}
 		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
 		return ExitCodeError
 	}

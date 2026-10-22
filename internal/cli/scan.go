@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
+	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
 	"github.com/yehezkiel1086/php2shell-check/internal/detect/local"
-	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
+	"github.com/yehezkiel1086/php2shell-check/internal/match"
 )
 
 func newScanCmd(opts *GlobalOptions) *cobra.Command {
@@ -38,25 +40,43 @@ func newScanLocalCmd(opts *GlobalOptions) *cobra.Command {
 		Short: "Scan the local host for PHP installations, packages, and configuration (read-only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			adv, err := advisory.Load(opts.AdvisoryFile)
+			if err != nil {
+				return fmt.Errorf("scan local load advisory: %w", err)
+			}
+
 			collector := local.NewDefaultCollector()
 			installs, err := collector.Collect(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("scan local: %w", err)
+				return fmt.Errorf("scan local collect: %w", err)
 			}
 
-			return writeInstallsOutput(cmd, opts, installs)
+			findings := match.EvaluateAll(installs, adv)
+			if writeErr := writeFindingsOutput(cmd, opts, findings); writeErr != nil {
+				return writeErr
+			}
+
+			failOn, err := ParseFailOn(opts.FailOn)
+			if err != nil {
+				return err
+			}
+			code := ExitCodeForFindings(FromMatchFindings(findings), failOn)
+			if code != ExitCodeClean {
+				return &findingExitError{code: code}
+			}
+			return nil
 		},
 	}
 }
 
-func writeInstallsOutput(cmd *cobra.Command, opts *GlobalOptions, installs []inventory.PHPInstall) error {
+func writeFindingsOutput(cmd *cobra.Command, opts *GlobalOptions, findings []match.Finding) error {
 	format, err := ParseOutputFormat(opts.Format)
 	if err != nil {
 		return err
 	}
 
-	if installs == nil {
-		installs = []inventory.PHPInstall{}
+	if findings == nil {
+		findings = []match.Finding{}
 	}
 
 	var buf bytes.Buffer
@@ -64,12 +84,12 @@ func writeInstallsOutput(cmd *cobra.Command, opts *GlobalOptions, installs []inv
 	case FormatJSON:
 		enc := json.NewEncoder(&buf)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(installs); err != nil {
-			return fmt.Errorf("encode installs JSON: %w", err)
+		if err := enc.Encode(findings); err != nil {
+			return fmt.Errorf("encode findings JSON: %w", err)
 		}
 	case FormatTable, FormatMD, FormatSARIF:
-		if err := renderInstallsTable(&buf, installs); err != nil {
-			return fmt.Errorf("render installs table: %w", err)
+		if err := renderFindingsTable(&buf, findings); err != nil {
+			return fmt.Errorf("render findings table: %w", err)
 		}
 	}
 
@@ -86,47 +106,56 @@ func writeInstallsOutput(cmd *cobra.Command, opts *GlobalOptions, installs []inv
 	return nil
 }
 
-func renderInstallsTable(buf *bytes.Buffer, installs []inventory.PHPInstall) error {
-	if len(installs) == 0 {
+func renderFindingsTable(buf *bytes.Buffer, findings []match.Finding) error {
+	if len(findings) == 0 {
 		_, _ = fmt.Fprintln(buf, "No PHP installations discovered.")
 		return nil
 	}
 
 	tw := tabwriter.NewWriter(buf, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ID\tSAPI\tVERSION\tTARGET\tPACKAGE\tCONFIDENCE\tINI SETTINGS")
-	for _, inst := range installs {
-		target := inst.BinaryPath
+	_, _ = fmt.Fprintln(tw, "TARGET\tSAPI\tVERSION\tVERDICT\tFIXED IN\tMITIGATION\tREASON")
+	for _, f := range findings {
+		target := f.Install.BinaryPath
 		if target == "" {
-			target = inst.ModulePath
+			target = f.Install.ModulePath
 		}
-		pkg := "-"
-		if inst.PackageName != "" {
-			pkg = fmt.Sprintf("%s (%s)", inst.PackageName, inst.PackageVersion)
+		fixedIn := f.FixedIn
+		if fixedIn == "" {
+			fixedIn = "-"
 		}
-		var iniPairs []string
-		for k, v := range inst.IniSettings {
-			iniPairs = append(iniPairs, fmt.Sprintf("%s=%s", k, v))
-		}
-		iniSummary := "-"
-		if len(iniPairs) > 0 {
-			iniSummary = strings.Join(iniPairs, ", ")
-		}
+		mitStr := formatMitigationMap(f.Mitigation)
 		_, _ = fmt.Fprintf(
 			tw,
 			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			inst.ID,
-			inst.SAPI,
-			inst.UpstreamVersion,
 			target,
-			pkg,
-			inst.Confidence,
-			iniSummary,
+			f.Install.SAPI,
+			f.Install.UpstreamVersion,
+			f.Verdict,
+			fixedIn,
+			mitStr,
+			f.Reason,
 		)
 	}
 	if err := tw.Flush(); err != nil {
-		return fmt.Errorf("flush installs table: %w", err)
+		return fmt.Errorf("flush findings table: %w", err)
 	}
 	return nil
+}
+
+func formatMitigationMap(m map[string]match.MitigationStatus) string {
+	if len(m) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", k, m[k]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func newScanImageCmd(_ *GlobalOptions) *cobra.Command {

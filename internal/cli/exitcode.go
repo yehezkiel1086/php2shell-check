@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+
+	"github.com/yehezkiel1086/php2shell-check/internal/match"
 )
 
 // Process exit codes as defined by the CLI specification.
@@ -57,6 +59,22 @@ type Finding struct {
 	Verified         bool
 	ConfigMitigated  bool
 	ConfigMitigation string
+}
+
+// FromMatchFindings converts match.Finding records into cli.Finding values for exit-code evaluation.
+func FromMatchFindings(matched []match.Finding) []Finding {
+	out := make([]Finding, 0, len(matched))
+	for _, mf := range matched {
+		target := mf.Install.BinaryPath
+		if target == "" {
+			target = mf.Install.ModulePath
+		}
+		out = append(out, Finding{
+			Target:  target,
+			Verdict: Verdict(mf.Verdict),
+		})
+	}
+	return out
 }
 
 // ExitCodeForFindings is a pure function that maps a slice of findings and the
