@@ -72,7 +72,7 @@ func NewRootCmd(info BuildInfo) (*cobra.Command, *GlobalOptions) {
 	pf.BoolVar(&opts.Hunt, "hunt", false, "Include passive log-review indicators for known PHP2Shell samples")
 
 	rootCmd.AddCommand(
-		newScanCmd(opts),
+		newScanCmd(opts, info),
 		newAdvisoriesCmd(opts),
 		newVersionCmd(info),
 	)

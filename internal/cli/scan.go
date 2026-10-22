@@ -1,23 +1,19 @@
 package cli
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"os"
-	"sort"
-	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
 	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
 	"github.com/yehezkiel1086/php2shell-check/internal/detect/local"
+	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 	"github.com/yehezkiel1086/php2shell-check/internal/match"
 	"github.com/yehezkiel1086/php2shell-check/internal/remediate"
+	"github.com/yehezkiel1086/php2shell-check/internal/report"
 )
 
-func newScanCmd(opts *GlobalOptions) *cobra.Command {
+func newScanCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 	scanCmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan targets for CVE-2026-109618 and CVE-2026-109619 exposure",
@@ -25,7 +21,7 @@ func newScanCmd(opts *GlobalOptions) *cobra.Command {
 	}
 
 	scanCmd.AddCommand(
-		newScanLocalCmd(opts),
+		newScanLocalCmd(opts, info),
 		newScanImageCmd(opts),
 		newScanSBOMCmd(opts),
 		newScanPathCmd(opts),
@@ -35,7 +31,7 @@ func newScanCmd(opts *GlobalOptions) *cobra.Command {
 	return scanCmd
 }
 
-func newScanLocalCmd(opts *GlobalOptions) *cobra.Command {
+func newScanLocalCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 	return &cobra.Command{
 		Use:   "local",
 		Short: "Scan the local host for PHP installations, packages, and configuration (read-only)",
@@ -52,137 +48,45 @@ func newScanLocalCmd(opts *GlobalOptions) *cobra.Command {
 				return fmt.Errorf("scan local collect: %w", err)
 			}
 
-			findings := match.EvaluateAll(installs, adv)
-			recs := remediate.BuildAll(findings, adv, remediate.Options{IncludeHuntHints: opts.Hunt})
-			if writeErr := writeFindingsOutput(cmd, opts, findings, recs); writeErr != nil {
-				return writeErr
-			}
-
-			failOn, err := ParseFailOn(opts.FailOn)
-			if err != nil {
-				return err
-			}
-			code := ExitCodeForFindings(FromMatchFindings(findings), failOn)
-			if code != ExitCodeClean {
-				return &findingExitError{code: code}
-			}
-			return nil
+			return evaluateAndRenderScan(cmd, opts, info, "local", installs, adv)
 		},
 	}
 }
 
-func writeFindingsOutput(cmd *cobra.Command, opts *GlobalOptions, findings []match.Finding, recs []remediate.Recommendation) error {
-	format, err := ParseOutputFormat(opts.Format)
+func evaluateAndRenderScan(
+	cmd *cobra.Command,
+	opts *GlobalOptions,
+	info BuildInfo,
+	mode string,
+	installs []inventory.PHPInstall,
+	adv advisory.Advisory,
+) error {
+	findings := match.EvaluateAll(installs, adv)
+	recs := remediate.BuildAll(findings, adv, remediate.Options{IncludeHuntHints: opts.Hunt})
+
+	repOpts := report.Options{
+		Format:      opts.Format,
+		NoColor:     opts.NoColor,
+		Quiet:       opts.Quiet,
+		IncludeHunt: opts.Hunt,
+		ToolVersion: info.Version,
+		Mode:        mode,
+	}
+
+	rep := report.Build(findings, recs, adv, repOpts)
+	if err := report.WriteToFileOrWriter(opts.OutputFile, cmd.OutOrStdout(), rep, repOpts); err != nil {
+		return fmt.Errorf("scan %s render report: %w", mode, err)
+	}
+
+	failOn, err := ParseFailOn(opts.FailOn)
 	if err != nil {
 		return err
 	}
-
-	if findings == nil {
-		findings = []match.Finding{}
-	}
-
-	var buf bytes.Buffer
-	switch format {
-	case FormatJSON:
-		enc := json.NewEncoder(&buf)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(findings); err != nil {
-			return fmt.Errorf("encode findings JSON: %w", err)
-		}
-	case FormatTable, FormatMD, FormatSARIF:
-		if err := renderFindingsTable(&buf, findings, recs, opts.Hunt); err != nil {
-			return fmt.Errorf("render findings table: %w", err)
-		}
-	}
-
-	if opts.OutputFile != "" {
-		if err := os.WriteFile(opts.OutputFile, buf.Bytes(), 0o600); err != nil {
-			return fmt.Errorf("write output file %q: %w", opts.OutputFile, err)
-		}
-		return nil
-	}
-
-	if _, err := cmd.OutOrStdout().Write(buf.Bytes()); err != nil {
-		return fmt.Errorf("write scan output: %w", err)
+	code := ExitCodeForFindings(FromMatchFindings(findings), failOn)
+	if code != ExitCodeClean {
+		return &findingExitError{code: code}
 	}
 	return nil
-}
-
-func renderFindingsTable(buf *bytes.Buffer, findings []match.Finding, recs []remediate.Recommendation, includeHunt bool) error {
-	if len(findings) == 0 {
-		_, _ = fmt.Fprintln(buf, "No PHP installations discovered.")
-		if includeHunt {
-			renderHuntSection(buf)
-		}
-		return nil
-	}
-
-	tw := tabwriter.NewWriter(buf, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "TARGET\tSAPI\tVERSION\tVERDICT\tFIXED IN\tMITIGATION\tREASON")
-	for _, f := range findings {
-		target := f.Install.BinaryPath
-		if target == "" {
-			target = f.Install.ModulePath
-		}
-		fixedIn := f.FixedIn
-		if fixedIn == "" {
-			fixedIn = "-"
-		}
-		mitStr := formatMitigationMap(f.Mitigation)
-		_, _ = fmt.Fprintf(
-			tw,
-			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			target,
-			f.Install.SAPI,
-			f.Install.UpstreamVersion,
-			f.Verdict,
-			fixedIn,
-			mitStr,
-			f.Reason,
-		)
-	}
-	if err := tw.Flush(); err != nil {
-		return fmt.Errorf("flush findings table: %w", err)
-	}
-
-	if len(recs) > 0 {
-		_, _ = fmt.Fprintln(buf, "\nRemediation Guidance:")
-		for i, rec := range recs {
-			if i > 0 {
-				_, _ = fmt.Fprintln(buf)
-			}
-			_, _ = fmt.Fprint(buf, remediate.FormatText(rec))
-		}
-	}
-
-	if includeHunt {
-		renderHuntSection(buf)
-	}
-
-	return nil
-}
-
-func renderHuntSection(buf *bytes.Buffer) {
-	_, _ = fmt.Fprintln(buf, "\nLog-Review Indicators (--hunt):")
-	for _, h := range remediate.HuntHints() {
-		_, _ = fmt.Fprintf(buf, "  - %s\n", h)
-	}
-}
-
-func formatMitigationMap(m map[string]match.MitigationStatus) string {
-	if len(m) == 0 {
-		return "-"
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, m[k]))
-	}
-	return strings.Join(parts, ", ")
 }
 
 func newScanImageCmd(_ *GlobalOptions) *cobra.Command {
