@@ -1,0 +1,84 @@
+{
+  "id": "PHP2SHELL-2026",
+  "cves": [
+    "CVE-2026-109618",
+    "CVE-2026-109619"
+  ],
+  "title": "PHP2Shell (CVE-2026-109618, CVE-2026-109619)",
+  "severity": "",
+  "cvss_v4": "",
+  "summary": "PHP engine RCE flaws affecting PHP 5.4.0 through 8.5.11. CVE-2026-109618 has no known config mitigation.",
+  "affected_min": "5.4.0",
+  "affected_max_inclusive": "8.5.11",
+  "branches": [
+    {
+      "branch": "8.5",
+      "fixed_in": "8.5.12",
+      "eol": false,
+      "upstream_fix_available": true,
+      "notes": ""
+    },
+    {
+      "branch": "8.4",
+      "fixed_in": "8.4.27",
+      "eol": false,
+      "upstream_fix_available": true,
+      "notes": ""
+    },
+    {
+      "branch": "8.3",
+      "fixed_in": "8.3.36",
+      "eol": false,
+      "upstream_fix_available": true,
+      "notes": ""
+    },
+    {
+      "branch": "8.2",
+      "fixed_in": "8.2.35",
+      "eol": false,
+      "upstream_fix_available": true,
+      "notes": ""
+    },
+    {
+      "branch": "8.1",
+      "fixed_in": "",
+      "eol": true,
+      "upstream_fix_available": null,
+      "notes": "unclear, vendor backport or upgrade"
+    },
+    {
+      "branch": "8.0",
+      "fixed_in": "",
+      "eol": true,
+      "upstream_fix_available": null,
+      "notes": "unclear, vendor backport or upgrade"
+    },
+    {
+      "branch": "7.4",
+      "fixed_in": "",
+      "eol": true,
+      "upstream_fix_available": null,
+      "notes": "unclear, vendor backport or upgrade"
+    }
+  ],
+  "distro_fixes": [],
+  "mitigations": [
+    {
+      "cve": "CVE-2026-109619",
+      "ini_key": "session.upload_progress.enabled",
+      "recommended_value": "0",
+      "applies_to_branch": "*",
+      "note": "Disable session upload progress"
+    },
+    {
+      "cve": "CVE-2026-109619",
+      "ini_key": "fatal_error_backtraces",
+      "recommended_value": "0",
+      "applies_to_branch": "8.5",
+      "note": "Disable fatal error backtraces on PHP 8.5"
+    }
+  ],
+  "references": [],
+  "last_verified": "",
+  "verified": false
+}
