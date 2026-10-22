@@ -1,9 +1,17 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+
+	"github.com/yehezkiel1086/php2shell-check/internal/detect/local"
+	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 )
 
 func newScanCmd(opts *GlobalOptions) *cobra.Command {
@@ -24,14 +32,101 @@ func newScanCmd(opts *GlobalOptions) *cobra.Command {
 	return scanCmd
 }
 
-func newScanLocalCmd(_ *GlobalOptions) *cobra.Command {
+func newScanLocalCmd(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "local",
 		Short: "Scan the local host for PHP installations, packages, and configuration (read-only)",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return fmt.Errorf("scan local: %w", ErrNotImplemented)
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			collector := local.NewDefaultCollector()
+			installs, err := collector.Collect(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("scan local: %w", err)
+			}
+
+			return writeInstallsOutput(cmd, opts, installs)
 		},
 	}
+}
+
+func writeInstallsOutput(cmd *cobra.Command, opts *GlobalOptions, installs []inventory.PHPInstall) error {
+	format, err := ParseOutputFormat(opts.Format)
+	if err != nil {
+		return err
+	}
+
+	if installs == nil {
+		installs = []inventory.PHPInstall{}
+	}
+
+	var buf bytes.Buffer
+	switch format {
+	case FormatJSON:
+		enc := json.NewEncoder(&buf)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(installs); err != nil {
+			return fmt.Errorf("encode installs JSON: %w", err)
+		}
+	case FormatTable, FormatMD, FormatSARIF:
+		if err := renderInstallsTable(&buf, installs); err != nil {
+			return fmt.Errorf("render installs table: %w", err)
+		}
+	}
+
+	if opts.OutputFile != "" {
+		if err := os.WriteFile(opts.OutputFile, buf.Bytes(), 0o600); err != nil {
+			return fmt.Errorf("write output file %q: %w", opts.OutputFile, err)
+		}
+		return nil
+	}
+
+	if _, err := cmd.OutOrStdout().Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("write scan output: %w", err)
+	}
+	return nil
+}
+
+func renderInstallsTable(buf *bytes.Buffer, installs []inventory.PHPInstall) error {
+	if len(installs) == 0 {
+		_, _ = fmt.Fprintln(buf, "No PHP installations discovered.")
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(buf, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "ID\tSAPI\tVERSION\tTARGET\tPACKAGE\tCONFIDENCE\tINI SETTINGS")
+	for _, inst := range installs {
+		target := inst.BinaryPath
+		if target == "" {
+			target = inst.ModulePath
+		}
+		pkg := "-"
+		if inst.PackageName != "" {
+			pkg = fmt.Sprintf("%s (%s)", inst.PackageName, inst.PackageVersion)
+		}
+		var iniPairs []string
+		for k, v := range inst.IniSettings {
+			iniPairs = append(iniPairs, fmt.Sprintf("%s=%s", k, v))
+		}
+		iniSummary := "-"
+		if len(iniPairs) > 0 {
+			iniSummary = strings.Join(iniPairs, ", ")
+		}
+		_, _ = fmt.Fprintf(
+			tw,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			inst.ID,
+			inst.SAPI,
+			inst.UpstreamVersion,
+			target,
+			pkg,
+			inst.Confidence,
+			iniSummary,
+		)
+	}
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush installs table: %w", err)
+	}
+	return nil
 }
 
 func newScanImageCmd(_ *GlobalOptions) *cobra.Command {
