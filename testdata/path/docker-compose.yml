@@ -1,0 +1,7 @@
+services:
+  app:
+    image: php:8.3.36-fpm
+  legacy:
+    image: "php:8.2-apache"
+  cache:
+    image: redis:7-alpine
