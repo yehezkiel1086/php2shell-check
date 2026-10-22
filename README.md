@@ -21,6 +21,9 @@
 
 ```bash
 go install github.com/yehezkiel1086/php2shell-check/cmd/php2shell-check@latest
+
+# Ensure Go's bin directory is in your PATH (Ubuntu/Debian/macOS):
+export PATH="$PATH:$(go env GOPATH)/bin"
 ```
 
 ### Build Locally

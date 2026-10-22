@@ -2,7 +2,7 @@ module github.com/yehezkiel1086/php2shell-check
 
 go 1.25.0
 
-toolchain go1.25.7
+toolchain go1.27.3
 
 require (
 	github.com/google/go-containerregistry v0.22.1
@@ -10,6 +10,7 @@ require (
 	github.com/knqyf263/go-deb-version v0.0.0-20241115132648-6f4aee6ccd23
 	github.com/knqyf263/go-rpm-version v0.0.0-20260811110310-1815e1f1b790
 	github.com/owenrumney/go-sarif/v2 v2.3.3
+	github.com/package-url/packageurl-go v0.1.7
 	github.com/spf13/cobra v1.10.2
 )
 
@@ -20,7 +21,6 @@ require (
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
-	github.com/package-url/packageurl-go v0.1.7 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	golang.org/x/sync v0.22.0 // indirect

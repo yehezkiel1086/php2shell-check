@@ -4,7 +4,7 @@ VERSION     ?= 0.1.0-dev
 COMMIT      ?= none
 DATE        ?= unknown
 
-export GOTOOLCHAIN ?= go1.25.7
+export GOTOOLCHAIN ?= go1.27.3
 
 LDFLAGS := -s -w \
 	-X main.version=$(VERSION) \
@@ -16,6 +16,9 @@ ifeq ($(OS),Windows_NT)
 else
 	BINARY_EXT :=
 endif
+
+GOPATH_BIN    := $(subst \,/,$(shell go env GOPATH))/bin
+GOLANGCI_LINT ?= $(if $(wildcard $(GOPATH_BIN)/golangci-lint$(BINARY_EXT)),$(GOPATH_BIN)/golangci-lint$(BINARY_EXT),golangci-lint)
 
 .PHONY: all build test lint vet clean
 
@@ -29,12 +32,13 @@ endif
 
 test:
 	go test -race ./...
+	go run ./scripts/e2e
 
 vet:
 	go vet ./...
 
 lint:
-	golangci-lint run ./...
+	$(GOLANGCI_LINT) run ./...
 
 clean:
 	go clean -testcache

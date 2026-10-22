@@ -1,5 +1,6 @@
 # Binaries
 /bin/
+/dist/
 /php2shell-check
 /php2shell-check.exe
 *.exe
