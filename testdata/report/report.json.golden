@@ -1,0 +1,273 @@
+{
+  "schema_version": "1.0.0",
+  "tool_version": "0.1.0-test",
+  "mode": "local",
+  "advisory": {
+    "id": "PHP2SHELL-2026",
+    "cves": [
+      "CVE-2026-109618",
+      "CVE-2026-109619"
+    ],
+    "title": "PHP2Shell (CVE-2026-109618, CVE-2026-109619)",
+    "severity": "",
+    "cvss_v4": "",
+    "summary": "PHP engine RCE flaws affecting PHP 5.4.0 through 8.5.11. CVE-2026-109618 has no known config mitigation.",
+    "affected_min": "5.4.0",
+    "affected_max_inclusive": "8.5.11",
+    "branches": [
+      {
+        "branch": "8.5",
+        "fixed_in": "8.5.12",
+        "eol": false,
+        "upstream_fix_available": true,
+        "notes": ""
+      },
+      {
+        "branch": "8.4",
+        "fixed_in": "8.4.27",
+        "eol": false,
+        "upstream_fix_available": true,
+        "notes": ""
+      },
+      {
+        "branch": "8.3",
+        "fixed_in": "8.3.36",
+        "eol": false,
+        "upstream_fix_available": true,
+        "notes": ""
+      },
+      {
+        "branch": "8.2",
+        "fixed_in": "8.2.35",
+        "eol": false,
+        "upstream_fix_available": true,
+        "notes": ""
+      },
+      {
+        "branch": "8.1",
+        "fixed_in": "",
+        "eol": true,
+        "upstream_fix_available": null,
+        "notes": "unclear, vendor backport or upgrade"
+      },
+      {
+        "branch": "8.0",
+        "fixed_in": "",
+        "eol": true,
+        "upstream_fix_available": null,
+        "notes": "unclear, vendor backport or upgrade"
+      },
+      {
+        "branch": "7.4",
+        "fixed_in": "",
+        "eol": true,
+        "upstream_fix_available": null,
+        "notes": "unclear, vendor backport or upgrade"
+      }
+    ],
+    "distro_fixes": [],
+    "mitigations": [
+      {
+        "cve": "CVE-2026-109619",
+        "ini_key": "session.upload_progress.enabled",
+        "recommended_value": "0",
+        "applies_to_branch": "*",
+        "note": "Disable session upload progress"
+      },
+      {
+        "cve": "CVE-2026-109619",
+        "ini_key": "fatal_error_backtraces",
+        "recommended_value": "0",
+        "applies_to_branch": "8.5",
+        "note": "Disable fatal error backtraces on PHP 8.5"
+      }
+    ],
+    "references": [],
+    "last_verified": "",
+    "verified": false
+  },
+  "summary": {
+    "total": 4,
+    "vulnerable": 1,
+    "likely_vulnerable": 1,
+    "unknown": 1,
+    "patched": 1,
+    "highest_verdict": "VULNERABLE"
+  },
+  "results": [
+    {
+      "finding": {
+        "advisory_id": "PHP2SHELL-2026",
+        "cves": [
+          "CVE-2026-109618",
+          "CVE-2026-109619"
+        ],
+        "install": {
+          "id": "local-fpm-111111111111",
+          "binary_path": "/usr/sbin/php-fpm8.4",
+          "upstream_version": "8.4.26",
+          "distro": {},
+          "sapi": "fpm",
+          "ini_settings": {
+            "session.upload_progress.enabled": "1"
+          },
+          "source": "local",
+          "confidence": "high",
+          "evidence": [
+            "version_cmd: /usr/sbin/php-fpm8.4 -v =\u003e 8.4.26",
+            "ini:session.upload_progress.enabled=1 (source: /etc/php/8.4/fpm/php.ini)"
+          ]
+        },
+        "verdict": "VULNERABLE",
+        "reason": "upstream version 8.4.26 \u003c branch fix 8.4.27",
+        "fixed_in": "8.4.27",
+        "mitigation": {
+          "CVE-2026-109618": "NONE_AVAILABLE",
+          "CVE-2026-109619": "NOT_APPLIED"
+        }
+      },
+      "recommendation": {
+        "priority": "P0",
+        "title": "[P0] Remediate /usr/sbin/php-fpm8.4 (VULNERABLE, SAPI: fpm)",
+        "steps": [
+          "Upgrade PHP on branch 8.4 to \u003e= 8.4.27.",
+          "Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n--- a/php.ini\n+++ b/php.ini\n-session.upload_progress.enabled = 1\n+session.upload_progress.enabled = 0\n--- a/pool.d/www.conf\n+++ b/pool.d/www.conf\n+php_admin_value[session.upload_progress.enabled] = 0"
+        ],
+        "restart_hints": [
+          "reload php-fpm (e.g. systemctl reload php-fpm)"
+        ],
+        "notes": "WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required."
+      }
+    },
+    {
+      "finding": {
+        "advisory_id": "PHP2SHELL-2026",
+        "cves": [
+          "CVE-2026-109618",
+          "CVE-2026-109619"
+        ],
+        "install": {
+          "id": "local-cli-222222222222",
+          "binary_path": "/usr/bin/php8.3",
+          "upstream_version": "8.3.35",
+          "package_manager": "deb",
+          "package_name": "php8.3-cli",
+          "package_version": "8.3.35-1+deb12u1",
+          "distro": {
+            "id": "debian",
+            "version_id": "12"
+          },
+          "sapi": "cli",
+          "ini_settings": {
+            "session.upload_progress.enabled": "0"
+          },
+          "source": "local",
+          "confidence": "high",
+          "evidence": [
+            "version_cmd: /usr/bin/php8.3 -v =\u003e 8.3.35-1+deb12u1",
+            "ini:session.upload_progress.enabled=0 (source: php -i)"
+          ]
+        },
+        "verdict": "LIKELY_VULNERABLE",
+        "reason": "upstream version 8.3.35 \u003c 8.3.36 on distro-managed package (backports possible)",
+        "fixed_in": "8.3.36",
+        "mitigation": {
+          "CVE-2026-109618": "NONE_AVAILABLE",
+          "CVE-2026-109619": "APPLIED"
+        }
+      },
+      "recommendation": {
+        "priority": "P2",
+        "title": "[P2] Remediate /usr/bin/php8.3 (LIKELY_VULNERABLE, SAPI: cli)",
+        "steps": [
+          "Upgrade PHP on branch 8.3 to \u003e= 8.3.36.",
+          "Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n--- a/php.ini\n+++ b/php.ini\n-session.upload_progress.enabled = 1\n+session.upload_progress.enabled = 0"
+        ],
+        "commands": [
+          {
+            "label": "Upgrade Debian/Ubuntu package",
+            "text": "apt-get install --only-upgrade php8.3-cli"
+          }
+        ],
+        "restart_hints": [
+          "reload php-fpm or Apache if web SAPIs share this PHP installation"
+        ],
+        "notes": "WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required."
+      }
+    },
+    {
+      "finding": {
+        "advisory_id": "PHP2SHELL-2026",
+        "cves": [
+          "CVE-2026-109618",
+          "CVE-2026-109619"
+        ],
+        "install": {
+          "id": "local-apache2handler-333333333333",
+          "module_path": "/usr/lib/apache2/modules/libphp.so",
+          "upstream_version": "",
+          "distro": {},
+          "sapi": "apache2handler",
+          "source": "local",
+          "confidence": "low",
+          "evidence": [
+            "permission_denied: open /usr/lib/apache2/modules/libphp.so: permission denied"
+          ]
+        },
+        "verdict": "UNKNOWN",
+        "reason": "unparseable upstream PHP version \"\"",
+        "mitigation": {
+          "CVE-2026-109618": "NONE_AVAILABLE",
+          "CVE-2026-109619": "UNKNOWN"
+        }
+      },
+      "recommendation": {
+        "priority": "P3",
+        "title": "Verify PHP installation manually for /usr/lib/apache2/modules/libphp.so",
+        "steps": [
+          "verify manually: inspect the PHP binary version, SAPI configuration, and vendor changelog.",
+          "Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n--- a/php.ini\n+++ b/php.ini\n-session.upload_progress.enabled = 1\n+session.upload_progress.enabled = 0\n-fatal_error_backtraces = 1\n+fatal_error_backtraces = 0"
+        ],
+        "restart_hints": [
+          "reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)"
+        ],
+        "notes": "WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required."
+      }
+    },
+    {
+      "finding": {
+        "advisory_id": "PHP2SHELL-2026",
+        "cves": [
+          "CVE-2026-109618",
+          "CVE-2026-109619"
+        ],
+        "install": {
+          "id": "local-cli-444444444444",
+          "binary_path": "/usr/local/bin/php8.5",
+          "upstream_version": "8.5.12",
+          "distro": {},
+          "sapi": "cli",
+          "source": "local",
+          "confidence": "high",
+          "evidence": [
+            "version_cmd: /usr/local/bin/php8.5 -v =\u003e 8.5.12"
+          ]
+        },
+        "verdict": "PATCHED",
+        "reason": "upstream version 8.5.12 \u003e= branch fix 8.5.12",
+        "fixed_in": "8.5.12",
+        "mitigation": {
+          "CVE-2026-109618": "NONE_AVAILABLE",
+          "CVE-2026-109619": "UNKNOWN"
+        }
+      },
+      "recommendation": {
+        "priority": "P3",
+        "title": "No remediation required for /usr/local/bin/php8.5 (PATCHED)",
+        "steps": [
+          "Installation meets or exceeds the patched version threshold."
+        ]
+      }
+    }
+  ]
+}

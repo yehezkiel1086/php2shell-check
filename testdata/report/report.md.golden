@@ -1,0 +1,153 @@
+# PHP2Shell Assessment Report (PHP2SHELL-2026)
+
+- **Tool Version:** `0.1.0-test`
+- **Scan Mode:** `local`
+- **CVEs Assessed:** `CVE-2026-109618`, `CVE-2026-109619`
+- **Advisory Verified:** `false`
+- **Affected Upstream Range:** `5.4.0` through `8.5.11` (inclusive)
+
+## Executive Summary
+
+| Metric | Value |
+| :--- | :--- |
+| Total Installations Discovered | 4 |
+| `VULNERABLE` | 1 |
+| `LIKELY_VULNERABLE` | 1 |
+| `UNKNOWN` | 1 |
+| `PATCHED` | 1 |
+| **Highest Severity Verdict** | `VULNERABLE` |
+
+## Findings Overview
+
+| Target | SAPI | Version | Verdict | Fixed In | Mitigation | Priority |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `/usr/sbin/php-fpm8.4` | `fpm` | `8.4.26` | **`VULNERABLE`** | `8.4.27` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED` | `P0` |
+| `/usr/bin/php8.3` | `cli` | `8.3.35` | **`LIKELY_VULNERABLE`** | `8.3.36` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=APPLIED` | `P2` |
+| `/usr/lib/apache2/modules/libphp.so` | `apache2handler` | `unknown` | **`UNKNOWN`** | `-` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN` | `P3` |
+| `/usr/local/bin/php8.5` | `cli` | `8.5.12` | **`PATCHED`** | `8.5.12` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN` | `P3` |
+
+## Per-Finding Evidence & Remediation
+
+### 1. `/usr/sbin/php-fpm8.4` (VULNERABLE)
+
+- **Priority:** `P0`
+- **SAPI:** `fpm`
+- **Upstream Version:** `8.4.26`
+- **Reason:** upstream version 8.4.26 < branch fix 8.4.27
+- **Mitigation Status:** `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED`
+
+#### Evidence
+
+- `version_cmd: /usr/sbin/php-fpm8.4 -v => 8.4.26`
+- `ini:session.upload_progress.enabled=1 (source: /etc/php/8.4/fpm/php.ini)`
+
+#### Recommended Remediation
+
+- Upgrade PHP on branch 8.4 to >= 8.4.27.
+- Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+
+```diff
+--- a/php.ini
++++ b/php.ini
+-session.upload_progress.enabled = 1
++session.upload_progress.enabled = 0
+--- a/pool.d/www.conf
++++ b/pool.d/www.conf
++php_admin_value[session.upload_progress.enabled] = 0
+```
+
+
+**Restart Hints:**
+- reload php-fpm (e.g. systemctl reload php-fpm)
+
+> WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
+
+### 2. `/usr/bin/php8.3` (LIKELY_VULNERABLE)
+
+- **Priority:** `P2`
+- **SAPI:** `cli`
+- **Upstream Version:** `8.3.35`
+- **Package:** `php8.3-cli` (`8.3.35-1+deb12u1`, manager: `deb`)
+- **Distribution:** `debian 12`
+- **Reason:** upstream version 8.3.35 < 8.3.36 on distro-managed package (backports possible)
+- **Mitigation Status:** `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=APPLIED`
+
+#### Evidence
+
+- `version_cmd: /usr/bin/php8.3 -v => 8.3.35-1+deb12u1`
+- `ini:session.upload_progress.enabled=0 (source: php -i)`
+
+#### Recommended Remediation
+
+- Upgrade PHP on branch 8.3 to >= 8.3.36.
+- Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+
+```diff
+--- a/php.ini
++++ b/php.ini
+-session.upload_progress.enabled = 1
++session.upload_progress.enabled = 0
+```
+
+
+**Commands (display only):**
+- Upgrade Debian/Ubuntu package: `apt-get install --only-upgrade php8.3-cli`
+
+**Restart Hints:**
+- reload php-fpm or Apache if web SAPIs share this PHP installation
+
+> WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
+
+### 3. `/usr/lib/apache2/modules/libphp.so` (UNKNOWN)
+
+- **Priority:** `P3`
+- **SAPI:** `apache2handler`
+- **Upstream Version:** ``
+- **Reason:** unparseable upstream PHP version ""
+- **Mitigation Status:** `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN`
+
+#### Evidence
+
+- `permission_denied: open /usr/lib/apache2/modules/libphp.so: permission denied`
+
+#### Recommended Remediation
+
+- verify manually: inspect the PHP binary version, SAPI configuration, and vendor changelog.
+- Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+
+```diff
+--- a/php.ini
++++ b/php.ini
+-session.upload_progress.enabled = 1
++session.upload_progress.enabled = 0
+-fatal_error_backtraces = 1
++fatal_error_backtraces = 0
+```
+
+
+**Restart Hints:**
+- reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)
+
+> WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
+
+### 4. `/usr/local/bin/php8.5` (PATCHED)
+
+- **Priority:** `P3`
+- **SAPI:** `cli`
+- **Upstream Version:** `8.5.12`
+- **Reason:** upstream version 8.5.12 >= branch fix 8.5.12
+- **Mitigation Status:** `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN`
+
+#### Evidence
+
+- `version_cmd: /usr/local/bin/php8.5 -v => 8.5.12`
+
+#### Recommended Remediation
+
+- Installation meets or exceeds the patched version threshold.
+
+## Limitations & Assessment Notes
+
+- **Read-Only Discovery:** `php2shell-check` performs passive version and configuration inspection without sending exploit payloads or executing untrusted binaries.
+- **Configuration Mitigations:** INI or FPM pool mitigations apply only to `CVE-2026-109619` and never alter the vulnerability verdict. `CVE-2026-109618` has no known configuration mitigation.
+- **Vendor Backports:** When `advisory.verified` is `false` or distribution backport versions are not listed in `distro_fixes`, distro-managed packages below the upstream fix version are reported as `LIKELY_VULNERABLE`.
