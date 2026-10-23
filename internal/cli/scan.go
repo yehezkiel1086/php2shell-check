@@ -72,6 +72,7 @@ func evaluateAndRenderScan(
 		Format:      opts.Format,
 		NoColor:     opts.NoColor,
 		Quiet:       opts.Quiet,
+		Verbose:     opts.Verbose,
 		IncludeHunt: opts.Hunt,
 		ToolVersion: info.Version,
 		Mode:        mode,
@@ -80,6 +81,13 @@ func evaluateAndRenderScan(
 	rep := report.Build(findings, recs, adv, repOpts)
 	if err := report.WriteToFileOrWriter(opts.OutputFile, cmd.OutOrStdout(), rep, repOpts); err != nil {
 		return fmt.Errorf("scan %s render report: %w", mode, err)
+	}
+
+	if len(findings) == 0 {
+		if opts.FailOnEmpty {
+			return &findingExitError{code: ExitCodeLikelyOrUnknown}
+		}
+		return nil
 	}
 
 	failOn, err := ParseFailOn(opts.FailOn)

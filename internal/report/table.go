@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -13,6 +15,8 @@ import (
 	"github.com/yehezkiel1086/php2shell-check/internal/phpver"
 	"github.com/yehezkiel1086/php2shell-check/internal/remediate"
 )
+
+var fileLineRefRe = regexp.MustCompile(`([^\s()\[\],]+:\d+)`)
 
 // PathModeSummaryNote is the required summary note displayed for path scans.
 const PathModeSummaryNote = "Path mode reports what the repository declares, not what is running."
@@ -52,7 +56,7 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 				hasInferredSAPI = true
 			}
 			ver := displayVersion(f)
-			mitStr := displayMitigation(f)
+			mitStr := displayMitigationVerbose(f, opts.Verbose)
 			_, _ = fmt.Fprintf(
 				tw,
 				"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -76,6 +80,9 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 		_, _ = buf.WriteString(renderedTable)
 		if hasInferredSAPI {
 			_, _ = fmt.Fprintf(&buf, "%s\n", InferredSAPIFootnote)
+		}
+		if opts.Verbose {
+			renderVerboseConfigFiles(&buf, rep.Results)
 		}
 	}
 
@@ -141,6 +148,7 @@ func colorizeSummaryVerdict(summaryLine string) string {
 		"highest_verdict=LIKELY_VULNERABLE", "highest_verdict="+ansiYellow+"LIKELY_VULNERABLE"+ansiReset,
 		"highest_verdict=UNKNOWN", "highest_verdict="+ansiCyan+"UNKNOWN"+ansiReset,
 		"highest_verdict=PATCHED", "highest_verdict="+ansiGreen+"PATCHED"+ansiReset,
+		"highest_verdict=NONE", "highest_verdict="+ansiCyan+"NONE"+ansiReset,
 	)
 	return replacer.Replace(summaryLine)
 }
@@ -212,10 +220,70 @@ func displaySAPI(f match.Finding) (string, bool) {
 }
 
 func displayMitigation(f match.Finding) string {
+	return displayMitigationVerbose(f, false)
+}
+
+func displayMitigationVerbose(f match.Finding, verbose bool) string {
+	if f.Verdict == match.VerdictPatched {
+		return "n/a (patched)"
+	}
 	if f.Install.Source == inventory.SourcePath {
 		return string(match.MitigationUnknown)
 	}
-	return formatMitigationMap(f.Mitigation)
+	if !verbose {
+		return formatMitigationMap(f.Mitigation)
+	}
+	if len(f.Mitigation) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(f.Mitigation))
+	for k := range f.Mitigation {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	winRef := winningMitigationFileLine(f.Install.Evidence)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		st := f.Mitigation[k]
+		entry := fmt.Sprintf("%s=%s", k, st)
+		if winRef != "" && (st == match.MitigationApplied || st == match.MitigationNotApplied) {
+			entry = fmt.Sprintf("%s (%s)", entry, winRef)
+		}
+		parts = append(parts, entry)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func winningMitigationFileLine(evidence []string) string {
+	var best string
+	for _, ev := range evidence {
+		if !strings.HasPrefix(ev, "ini: ") {
+			continue
+		}
+		matches := fileLineRefRe.FindAllString(ev, -1)
+		if len(matches) > 0 {
+			last := matches[len(matches)-1]
+			best = path.Base(strings.ReplaceAll(last, `\`, "/"))
+		}
+	}
+	return best
+}
+
+func renderVerboseConfigFiles(buf *bytes.Buffer, items []Item) {
+	_, _ = fmt.Fprintln(buf, "\nConfig Files Parsed (precedence order):")
+	for _, item := range items {
+		f := item.Finding
+		target := primaryTarget(f)
+		sapi, _ := displaySAPI(f)
+		if len(f.Install.ConfigFiles) == 0 {
+			_, _ = fmt.Fprintf(buf, "  %s (%s): (none)\n", target, sapi)
+			continue
+		}
+		_, _ = fmt.Fprintf(buf, "  %s (%s):\n", target, sapi)
+		for i, cf := range f.Install.ConfigFiles {
+			_, _ = fmt.Fprintf(buf, "    %d. %s\n", i+1, cf)
+		}
+	}
 }
 
 func isPathReport(rep Report) bool {

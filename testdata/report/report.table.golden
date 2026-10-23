@@ -2,7 +2,7 @@ TARGET                              SAPI            VERSION  VERDICT            
 /usr/sbin/php-fpm8.4                fpm             8.4.26   VULNERABLE         8.4.27    CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED  upstream version 8.4.26 < branch fix 8.4.27
 /usr/bin/php8.3                     cli             8.3.35   LIKELY_VULNERABLE  8.3.36    CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=APPLIED      upstream version 8.3.35 < 8.3.36 on distro-managed package (backports possible)
 /usr/lib/apache2/modules/libphp.so  apache2handler  unknown  UNKNOWN            -         CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN      unparseable upstream PHP version ""
-/usr/local/bin/php8.5               cli             8.5.12   PATCHED            8.5.12    CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN      upstream version 8.5.12 >= branch fix 8.5.12
+/usr/local/bin/php8.5               cli             8.5.12   PATCHED            8.5.12    n/a (patched)                                                upstream version 8.5.12 >= branch fix 8.5.12
 
 Summary: total=4 vulnerable=1 likely_vulnerable=1 unknown=1 patched=1 highest_verdict=VULNERABLE
 

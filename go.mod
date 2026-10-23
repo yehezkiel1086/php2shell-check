@@ -2,8 +2,6 @@ module github.com/yehezkiel1086/php2shell-check
 
 go 1.25.0
 
-toolchain go1.27.3
-
 require (
 	github.com/google/go-containerregistry v0.22.1
 	github.com/knqyf263/go-apk-version v0.0.0-20200609155635-041fdbb8563f

@@ -9,6 +9,7 @@ This document specifies the stable JSON output schema produced by `php2shell-che
 | `schema_version` | `string` | Yes | Semantic version of the report schema (`"1.0.0"`). |
 | `tool_version` | `string` | Yes | Build version of `php2shell-check`. |
 | `mode` | `string` | Yes | Discovery subcommand (`"local"`, `"image"`, `"sbom"`, `"path"`, `"remote"`). |
+| `status` | `string` | No | Operational status (`"no_php_found"` when no PHP installations were discovered). |
 | `advisory` | `Advisory` | Yes | Loaded advisory metadata used during evaluation. |
 | `summary` | `Summary` | Yes | Aggregated counts per verdict and overall highest severity verdict. |
 | `results` | `Item[]` | Yes | Array of assessed findings paired with remediation guidance (never `null`). |
@@ -23,7 +24,7 @@ This document specifies the stable JSON output schema produced by `php2shell-che
 | `likely_vulnerable` | `integer` | Count of installations with verdict `LIKELY_VULNERABLE`. |
 | `unknown` | `integer` | Count of installations with verdict `UNKNOWN`. |
 | `patched` | `integer` | Count of installations with verdict `PATCHED`. |
-| `highest_verdict` | `string` | Most severe verdict across all findings (`VULNERABLE > LIKELY_VULNERABLE > UNKNOWN > PATCHED`). |
+| `highest_verdict` | `string` | Most severe verdict across all findings (`VULNERABLE > LIKELY_VULNERABLE > UNKNOWN > PATCHED`, or `"NONE"` if empty). |
 
 ## `Item` Object (`results[]`)
 

@@ -203,3 +203,47 @@ func TestInvalidGlobalFlagsReturnExitCodeError(t *testing.T) {
 		})
 	}
 }
+
+func TestEmptyScanFlagsAndStatus(t *testing.T) {
+	t.Parallel()
+
+	emptyDir := t.TempDir()
+
+	t.Run("empty scan defaults to exit code 0 and highest_verdict=NONE", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code := cli.Run(context.Background(), cli.BuildInfo{Version: "0.1.0"}, []string{"scan", "path", emptyDir, "--no-color"}, &stdout, &stderr)
+		if code != cli.ExitCodeClean {
+			t.Fatalf("empty scan exit code = %d, want %d (stderr: %s)", code, cli.ExitCodeClean, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "highest_verdict=NONE") {
+			t.Errorf("stdout missing highest_verdict=NONE:\n%s", out)
+		}
+	})
+
+	t.Run("empty scan with --fail-on-empty exits with code 2", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code := cli.Run(context.Background(), cli.BuildInfo{Version: "0.1.0"}, []string{"scan", "path", emptyDir, "--fail-on-empty", "--no-color"}, &stdout, &stderr)
+		if code != cli.ExitCodeLikelyOrUnknown {
+			t.Fatalf("empty scan --fail-on-empty exit code = %d, want %d", code, cli.ExitCodeLikelyOrUnknown)
+		}
+	})
+
+	t.Run("empty scan JSON report contains status no_php_found", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code := cli.Run(context.Background(), cli.BuildInfo{Version: "0.1.0"}, []string{"scan", "path", emptyDir, "--format", "json"}, &stdout, &stderr)
+		if code != cli.ExitCodeClean {
+			t.Fatalf("empty scan json exit code = %d, want %d", code, cli.ExitCodeClean)
+		}
+		out := stdout.String()
+		if !strings.Contains(out, `"status": "no_php_found"`) {
+			t.Errorf("JSON report missing status no_php_found:\n%s", out)
+		}
+		if !strings.Contains(out, `"highest_verdict": "NONE"`) {
+			t.Errorf("JSON report missing highest_verdict NONE:\n%s", out)
+		}
+	})
+}

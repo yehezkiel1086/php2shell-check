@@ -50,6 +50,7 @@ type Report struct {
 	SchemaVersion string            `json:"schema_version"`
 	ToolVersion   string            `json:"tool_version"`
 	Mode          string            `json:"mode"`
+	Status        string            `json:"status,omitempty"`
 	Advisory      advisory.Advisory `json:"advisory"`
 	Summary       Summary           `json:"summary"`
 	Results       []Item            `json:"results"`
@@ -61,6 +62,7 @@ type Options struct {
 	Format      string
 	NoColor     bool
 	Quiet       bool
+	Verbose     bool
 	IncludeHunt bool
 	ToolVersion string
 	Mode        string
@@ -113,10 +115,16 @@ func Build(findings []match.Finding, recs []remediate.Recommendation, adv adviso
 		huntHints = remediate.HuntHints()
 	}
 
+	status := ""
+	if len(findings) == 0 {
+		status = "no_php_found"
+	}
+
 	return Report{
 		SchemaVersion: SchemaVersion,
 		ToolVersion:   toolVer,
 		Mode:          mode,
+		Status:        status,
 		Advisory:      adv,
 		Summary:       summary,
 		Results:       items,

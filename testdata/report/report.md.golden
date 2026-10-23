@@ -24,7 +24,7 @@
 | `/usr/sbin/php-fpm8.4` | `fpm` | `8.4.26` | **`VULNERABLE`** | `8.4.27` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED` | `P0` |
 | `/usr/bin/php8.3` | `cli` | `8.3.35` | **`LIKELY_VULNERABLE`** | `8.3.36` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=APPLIED` | `P2` |
 | `/usr/lib/apache2/modules/libphp.so` | `apache2handler` | `unknown` | **`UNKNOWN`** | `-` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN` | `P3` |
-| `/usr/local/bin/php8.5` | `cli` | `8.5.12` | **`PATCHED`** | `8.5.12` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN` | `P3` |
+| `/usr/local/bin/php8.5` | `cli` | `8.5.12` | **`PATCHED`** | `8.5.12` | `n/a (patched)` | `P3` |
 
 ## Per-Finding Evidence & Remediation
 
@@ -136,7 +136,7 @@
 - **SAPI:** `cli`
 - **Upstream Version:** `8.5.12`
 - **Reason:** upstream version 8.5.12 >= branch fix 8.5.12
-- **Mitigation Status:** `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=UNKNOWN`
+- **Mitigation Status:** `n/a (patched)`
 
 #### Evidence
 

@@ -1,10 +1,10 @@
-TARGET                       SAPI             VERSION                      VERDICT     FIXED IN  MITIGATION  REASON
-03-vuln/Dockerfile:1         apache2handler*  8.3.35                       VULNERABLE  8.3.36    UNKNOWN     upstream version 8.3.35 < branch fix 8.3.36
-06-phpver/.php-version:1     cli              8.3.35                       VULNERABLE  8.3.36    UNKNOWN     upstream version 8.3.35 < branch fix 8.3.36
-01-dvwa/Dockerfile:1         apache2handler*  unresolved (php:8-apache)    UNKNOWN     -         UNKNOWN     floating version constraint or tag "php:8-apache" cannot prove a patched version; pin to FixedIn version or scan the resolved image digest
-02-branch/Dockerfile:1       apache2handler*  unresolved (php:8.3-apache)  UNKNOWN     8.3.36    UNKNOWN     floating version constraint or tag "php:8.3-apache" cannot prove a patched version; pin to 8.3.36 or scan the resolved image digest
-05-composer/composer.json:3  unknown          ^8.2                         UNKNOWN     8.2.35    UNKNOWN     floating version constraint or tag "^8.2" cannot prove a patched version; pin to 8.2.35 or scan the resolved image digest
-04-patch/Dockerfile:1        apache2handler*  8.3.36                       PATCHED     8.3.36    UNKNOWN     upstream version 8.3.36 >= branch fix 8.3.36
+TARGET                       SAPI             VERSION                      VERDICT     FIXED IN  MITIGATION     REASON
+03-vuln/Dockerfile:1         apache2handler*  8.3.35                       VULNERABLE  8.3.36    UNKNOWN        upstream version 8.3.35 < branch fix 8.3.36
+06-phpver/.php-version:1     cli              8.3.35                       VULNERABLE  8.3.36    UNKNOWN        upstream version 8.3.35 < branch fix 8.3.36
+01-dvwa/Dockerfile:1         apache2handler*  unresolved (php:8-apache)    UNKNOWN     -         UNKNOWN        floating version constraint or tag "php:8-apache" cannot prove a patched version; pin to FixedIn version or scan the resolved image digest
+02-branch/Dockerfile:1       apache2handler*  unresolved (php:8.3-apache)  UNKNOWN     8.3.36    UNKNOWN        floating version constraint or tag "php:8.3-apache" cannot prove a patched version; pin to 8.3.36 or scan the resolved image digest
+05-composer/composer.json:3  unknown          ^8.2                         UNKNOWN     8.2.35    UNKNOWN        floating version constraint or tag "^8.2" cannot prove a patched version; pin to 8.2.35 or scan the resolved image digest
+04-patch/Dockerfile:1        apache2handler*  8.3.36                       PATCHED     8.3.36    n/a (patched)  upstream version 8.3.36 >= branch fix 8.3.36
 * inferred from image tag
 
 Summary: total=6 vulnerable=2 likely_vulnerable=0 unknown=3 patched=1 highest_verdict=VULNERABLE
@@ -72,7 +72,5 @@ Priority: P3
 Title:    No remediation required for 04-patch/Dockerfile:1 (PATCHED)
 Steps:
   1. Declared container image tag php:8.3.36-apache meets or exceeds the patched version threshold (8.3.36).
-  2. config mitigation cannot be assessed from build files, scan the built image
 Restart Hints:
   - rebuild and redeploy the image
-Notes:    config mitigation cannot be assessed from build files, scan the built image
