@@ -37,35 +37,64 @@ func RenderMarkdown(w io.Writer, rep Report, _ Options) error {
 
 	_, _ = fmt.Fprintln(&b, "## Findings Overview")
 	_, _ = fmt.Fprintln(&b)
+	if imgHeader, resolvedNote := formatImageHeaderAndNote(rep); imgHeader != "" {
+		_, _ = fmt.Fprintf(&b, "%s\n", imgHeader)
+		if resolvedNote != "" {
+			_, _ = fmt.Fprintf(&b, "%s\n", resolvedNote)
+		}
+		_, _ = fmt.Fprintln(&b)
+	}
 	if len(rep.Results) == 0 {
 		_, _ = fmt.Fprintln(&b, "_No PHP installations were discovered in the target scope._")
 		_, _ = fmt.Fprintln(&b)
 	} else {
-		_, _ = fmt.Fprintln(&b, "| Target | SAPI | Version | Verdict | Fixed In | Mitigation | Priority |")
-		_, _ = fmt.Fprintln(&b, "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+		hasPkg := hasDistroPackage(rep)
+		if hasPkg {
+			_, _ = fmt.Fprintln(&b, "| Target | SAPI | Version | Package | Verdict | Fixed In | Mitigation | Priority |")
+			_, _ = fmt.Fprintln(&b, "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+		} else {
+			_, _ = fmt.Fprintln(&b, "| Target | SAPI | Version | Verdict | Fixed In | Mitigation | Priority |")
+			_, _ = fmt.Fprintln(&b, "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+		}
 		hasInferredSAPI := false
 		for _, item := range rep.Results {
 			f := item.Finding
-			fixedIn := f.FixedIn
-			if fixedIn == "" {
-				fixedIn = "-"
-			}
+			fixedIn := displayFixedIn(f, rep.Advisory)
 			sapiStr, inferred := displaySAPI(f)
 			if inferred {
 				hasInferredSAPI = true
 			}
 			ver := displayVersion(f)
-			_, _ = fmt.Fprintf(
-				&b,
-				"| `%s` | `%s` | `%s` | **`%s`** | `%s` | `%s` | `%s` |\n",
-				primaryTarget(f),
-				sapiStr,
-				ver,
-				f.Verdict,
-				fixedIn,
-				displayMitigation(f),
-				item.Recommendation.Priority,
-			)
+			if hasPkg {
+				pkgCol := formatPackageColumn(f)
+				if pkgCol != "-" {
+					pkgCol = fmt.Sprintf("`%s`", pkgCol)
+				}
+				_, _ = fmt.Fprintf(
+					&b,
+					"| `%s` | `%s` | `%s` | %s | **`%s`** | `%s` | `%s` | `%s` |\n",
+					primaryTarget(f),
+					sapiStr,
+					ver,
+					pkgCol,
+					f.Verdict,
+					fixedIn,
+					displayMitigation(f),
+					item.Recommendation.Priority,
+				)
+			} else {
+				_, _ = fmt.Fprintf(
+					&b,
+					"| `%s` | `%s` | `%s` | **`%s`** | `%s` | `%s` | `%s` |\n",
+					primaryTarget(f),
+					sapiStr,
+					ver,
+					f.Verdict,
+					fixedIn,
+					displayMitigation(f),
+					item.Recommendation.Priority,
+				)
+			}
 		}
 		_, _ = fmt.Fprintln(&b)
 		if hasInferredSAPI {
@@ -106,6 +135,9 @@ func RenderMarkdown(w io.Writer, rep Report, _ Options) error {
 
 			_, _ = fmt.Fprintln(&b, "#### Recommended Remediation")
 			_, _ = fmt.Fprintln(&b)
+			if len(rec.AppliesTo) > 1 {
+				_, _ = fmt.Fprintf(&b, "- **Applies to:** `%s`\n", strings.Join(rec.AppliesTo, "`, `"))
+			}
 			for _, step := range rec.Steps {
 				if strings.Contains(step, "\n") {
 					lines := strings.SplitN(step, "\n", 2)

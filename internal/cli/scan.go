@@ -65,17 +65,33 @@ func evaluateAndRenderScan(
 	installs []inventory.PHPInstall,
 	adv advisory.Advisory,
 ) error {
+	return evaluateAndRenderScanWithExtra(cmd, opts, info, mode, installs, adv, report.Options{})
+}
+
+func evaluateAndRenderScanWithExtra(
+	cmd *cobra.Command,
+	opts *GlobalOptions,
+	info BuildInfo,
+	mode string,
+	installs []inventory.PHPInstall,
+	adv advisory.Advisory,
+	extra report.Options,
+) error {
 	findings := match.EvaluateAll(installs, adv)
 	recs := remediate.BuildAll(findings, adv, remediate.Options{IncludeHuntHints: opts.Hunt})
 
 	repOpts := report.Options{
-		Format:      opts.Format,
-		NoColor:     opts.NoColor,
-		Quiet:       opts.Quiet,
-		Verbose:     opts.Verbose,
-		IncludeHunt: opts.Hunt,
-		ToolVersion: info.Version,
-		Mode:        mode,
+		Format:          opts.Format,
+		NoColor:         opts.NoColor,
+		Quiet:           opts.Quiet,
+		Verbose:         opts.Verbose,
+		IncludeHunt:     opts.Hunt,
+		ToolVersion:     info.Version,
+		Mode:            mode,
+		ImageRef:        extra.ImageRef,
+		ImageDigest:     extra.ImageDigest,
+		Platform:        extra.Platform,
+		ResolvedFromTag: extra.ResolvedFromTag,
 	}
 
 	rep := report.Build(findings, recs, adv, repOpts)
@@ -120,7 +136,10 @@ func newScanImageCmd(opts *GlobalOptions, info BuildInfo) *cobra.Command {
 				return fmt.Errorf("scan image %q: %w", args[0], err)
 			}
 
-			return evaluateAndRenderScan(cmd, opts, info, "image", installs, adv)
+			return evaluateAndRenderScanWithExtra(cmd, opts, info, "image", installs, adv, report.Options{
+				ImageRef:        args[0],
+				ResolvedFromTag: inventory.IsFloatingTag(args[0]),
+			})
 		},
 	}
 }

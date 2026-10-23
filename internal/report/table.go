@@ -37,37 +37,68 @@ const (
 func RenderTable(w io.Writer, rep Report, opts Options) error {
 	var buf bytes.Buffer
 
+	imgHeader, resolvedNote := formatImageHeaderAndNote(rep)
+	if imgHeader != "" {
+		_, _ = fmt.Fprintln(&buf, imgHeader)
+		if resolvedNote != "" {
+			_, _ = fmt.Fprintln(&buf, resolvedNote)
+		}
+	}
+
 	if len(rep.Results) == 0 {
 		_, _ = fmt.Fprintln(&buf, "No PHP installations discovered.")
 	} else {
 		var tableBuf bytes.Buffer
 		tw := tabwriter.NewWriter(&tableBuf, 0, 0, 2, ' ', 0)
-		_, _ = fmt.Fprintln(tw, "TARGET\tSAPI\tVERSION\tVERDICT\tFIXED IN\tMITIGATION\tREASON")
+		hasPkg := hasDistroPackage(rep)
+		if hasPkg {
+			_, _ = fmt.Fprintln(tw, "TARGET\tSAPI\tVERSION\tPACKAGE\tVERDICT\tFIXED IN\tMITIGATION\tREASON")
+		} else {
+			_, _ = fmt.Fprintln(tw, "TARGET\tSAPI\tVERSION\tVERDICT\tFIXED IN\tMITIGATION\tREASON")
+		}
 		hasInferredSAPI := false
 		for _, item := range rep.Results {
 			f := item.Finding
 			target := primaryTarget(f)
-			fixedIn := f.FixedIn
-			if fixedIn == "" {
-				fixedIn = "-"
-			}
+			fixedIn := displayFixedIn(f, rep.Advisory)
 			sapiStr, inferred := displaySAPI(f)
 			if inferred {
 				hasInferredSAPI = true
 			}
 			ver := displayVersion(f)
 			mitStr := displayMitigationVerbose(f, opts.Verbose)
-			_, _ = fmt.Fprintf(
-				tw,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				target,
-				sapiStr,
-				ver,
-				f.Verdict,
-				fixedIn,
-				mitStr,
-				f.Reason,
-			)
+			if hasPkg {
+				pkgStr := formatPackageColumn(f)
+				_, _ = fmt.Fprintf(
+					tw,
+					"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					target,
+					sapiStr,
+					ver,
+					pkgStr,
+					f.Verdict,
+					fixedIn,
+					mitStr,
+					f.Reason,
+				)
+			} else {
+				_, _ = fmt.Fprintf(
+					tw,
+					"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					target,
+					sapiStr,
+					ver,
+					f.Verdict,
+					fixedIn,
+					mitStr,
+					f.Reason,
+				)
+			}
+			if opts.Verbose && len(f.Install.Evidence) > 0 {
+				for _, ev := range f.Install.Evidence {
+					_, _ = fmt.Fprintf(tw, "    %s\n", ev)
+				}
+			}
 		}
 		if err := tw.Flush(); err != nil {
 			return fmt.Errorf("flush report table: %w", err)
@@ -105,11 +136,12 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 
 	if !opts.Quiet && len(rep.Results) > 0 {
 		_, _ = fmt.Fprintln(&buf, "\nRemediation Guidance:")
-		for i, item := range rep.Results {
+		recs := groupRemediations(rep.Results)
+		for i, rec := range recs {
 			if i > 0 {
 				_, _ = fmt.Fprintln(&buf)
 			}
-			recText := remediate.FormatText(item.Recommendation)
+			recText := remediate.FormatText(rec)
 			if !opts.NoColor {
 				recText = colorizeRemediationText(recText)
 			}

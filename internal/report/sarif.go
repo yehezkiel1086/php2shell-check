@@ -47,6 +47,25 @@ func RenderSARIF(w io.Writer, rep Report) error {
 			uri = "php"
 		}
 
+		imgRef := f.ImageRef
+		if imgRef == "" {
+			imgRef = f.Install.ImageRef
+		}
+		if imgRef == "" {
+			imgRef = rep.ImageRef
+		}
+		if imgRef != "" {
+			uri = fmt.Sprintf("%s/%s", imgRef, uri)
+		}
+
+		digest := f.ImageDigest
+		if digest == "" {
+			digest = f.Install.ImageDigest
+		}
+		if digest == "" {
+			digest = rep.ImageDigest
+		}
+
 		cves := f.CVEs
 		if len(cves) == 0 {
 			cves = rep.Advisory.CVEs
@@ -74,6 +93,11 @@ func RenderSARIF(w io.Writer, rep Report) error {
 				WithLevel(level).
 				WithMessage(sarif.NewTextMessage(msgText)).
 				WithLocations([]*sarif.Location{loc})
+			if digest != "" {
+				pb := sarif.NewPropertyBag()
+				pb.AddString("image_digest", digest)
+				res.AttachPropertyBag(pb)
+			}
 
 			run.AddResult(res)
 		}

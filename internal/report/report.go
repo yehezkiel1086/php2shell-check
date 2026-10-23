@@ -14,7 +14,7 @@ import (
 )
 
 // SchemaVersion is the semantic version of the JSON report schema.
-const SchemaVersion = "1.0.0"
+const SchemaVersion = "1.1.0"
 
 // Supported output format names.
 const (
@@ -47,25 +47,33 @@ type Item struct {
 
 // Report is the top-level assessment report structure serialized across formats.
 type Report struct {
-	SchemaVersion string            `json:"schema_version"`
-	ToolVersion   string            `json:"tool_version"`
-	Mode          string            `json:"mode"`
-	Status        string            `json:"status,omitempty"`
-	Advisory      advisory.Advisory `json:"advisory"`
-	Summary       Summary           `json:"summary"`
-	Results       []Item            `json:"results"`
-	HuntHints     []string          `json:"hunt_hints,omitempty"`
+	SchemaVersion   string            `json:"schema_version"`
+	ToolVersion     string            `json:"tool_version"`
+	Mode            string            `json:"mode"`
+	Status          string            `json:"status,omitempty"`
+	ImageRef        string            `json:"image_ref,omitempty"`
+	ImageDigest     string            `json:"image_digest,omitempty"`
+	Platform        string            `json:"platform,omitempty"`
+	ResolvedFromTag bool              `json:"resolved_from_tag,omitempty"`
+	Advisory        advisory.Advisory `json:"advisory"`
+	Summary         Summary           `json:"summary"`
+	Results         []Item            `json:"results"`
+	HuntHints       []string          `json:"hunt_hints,omitempty"`
 }
 
 // Options controls report construction and rendering behavior.
 type Options struct {
-	Format      string
-	NoColor     bool
-	Quiet       bool
-	Verbose     bool
-	IncludeHunt bool
-	ToolVersion string
-	Mode        string
+	Format          string
+	NoColor         bool
+	Quiet           bool
+	Verbose         bool
+	IncludeHunt     bool
+	ToolVersion     string
+	Mode            string
+	ImageRef        string
+	ImageDigest     string
+	Platform        string
+	ResolvedFromTag bool
 }
 
 // Build constructs a sanitized Report from findings, recommendations, and advisory metadata.
@@ -77,6 +85,26 @@ func Build(findings []match.Finding, recs []remediate.Recommendation, adv adviso
 	mode := opts.Mode
 	if mode == "" {
 		mode = "local"
+	}
+
+	imageRef := opts.ImageRef
+	imageDigest := opts.ImageDigest
+	platform := opts.Platform
+	resolvedFromTag := opts.ResolvedFromTag
+
+	for _, f := range findings {
+		if imageRef == "" && f.ImageRef != "" {
+			imageRef = f.ImageRef
+		}
+		if imageDigest == "" && f.ImageDigest != "" {
+			imageDigest = f.ImageDigest
+		}
+		if platform == "" && f.Platform != "" {
+			platform = f.Platform
+		}
+		if f.ResolvedFromTag {
+			resolvedFromTag = true
+		}
 	}
 
 	items := make([]Item, 0, len(findings))
@@ -121,14 +149,18 @@ func Build(findings []match.Finding, recs []remediate.Recommendation, adv adviso
 	}
 
 	return Report{
-		SchemaVersion: SchemaVersion,
-		ToolVersion:   toolVer,
-		Mode:          mode,
-		Status:        status,
-		Advisory:      adv,
-		Summary:       summary,
-		Results:       items,
-		HuntHints:     huntHints,
+		SchemaVersion:   SchemaVersion,
+		ToolVersion:     toolVer,
+		Mode:            mode,
+		Status:          status,
+		ImageRef:        imageRef,
+		ImageDigest:     imageDigest,
+		Platform:        platform,
+		ResolvedFromTag: resolvedFromTag,
+		Advisory:        adv,
+		Summary:         summary,
+		Results:         items,
+		HuntHints:       huntHints,
 	}
 }
 
@@ -186,6 +218,20 @@ func sanitizeFinding(f match.Finding) match.Finding {
 			ev[i] = RedactSecrets(line)
 		}
 		out.Install.Evidence = ev
+	}
+	if len(f.VersionEvidence) > 0 {
+		ev := make([]string, len(f.VersionEvidence))
+		for i, line := range f.VersionEvidence {
+			ev[i] = RedactSecrets(line)
+		}
+		out.VersionEvidence = ev
+	}
+	if len(f.ConfigEvidence) > 0 {
+		ev := make([]string, len(f.ConfigEvidence))
+		for i, line := range f.ConfigEvidence {
+			ev[i] = RedactSecrets(line)
+		}
+		out.ConfigEvidence = ev
 	}
 	return out
 }
