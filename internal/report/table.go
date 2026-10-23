@@ -66,8 +66,7 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 		_, _ = buf.WriteString(renderedTable)
 	}
 
-	_, _ = fmt.Fprintf(
-		&buf,
+	summaryLine := fmt.Sprintf(
 		"\nSummary: total=%d vulnerable=%d likely_vulnerable=%d unknown=%d patched=%d highest_verdict=%s\n",
 		rep.Summary.Total,
 		rep.Summary.Vulnerable,
@@ -76,6 +75,10 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 		rep.Summary.Patched,
 		rep.Summary.HighestVerdict,
 	)
+	if !opts.NoColor {
+		summaryLine = colorizeSummaryVerdict(summaryLine)
+	}
+	_, _ = buf.WriteString(summaryLine)
 
 	if !opts.Quiet && len(rep.Results) > 0 {
 		_, _ = fmt.Fprintln(&buf, "\nRemediation Guidance:")
@@ -83,7 +86,11 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 			if i > 0 {
 				_, _ = fmt.Fprintln(&buf)
 			}
-			_, _ = fmt.Fprint(&buf, remediate.FormatText(item.Recommendation))
+			recText := remediate.FormatText(item.Recommendation)
+			if !opts.NoColor {
+				recText = colorizeRemediationText(recText)
+			}
+			_, _ = buf.WriteString(recText)
 		}
 	}
 
@@ -106,8 +113,45 @@ func colorizeVerdicts(tableText string) string {
 		"  VULNERABLE  ", "  "+ansiRed+"VULNERABLE"+ansiReset+"  ",
 		"  UNKNOWN  ", "  "+ansiCyan+"UNKNOWN"+ansiReset+"  ",
 		"  PATCHED  ", "  "+ansiGreen+"PATCHED"+ansiReset+"  ",
+		"=NOT_APPLIED", "="+ansiRed+"NOT_APPLIED"+ansiReset,
+		"=APPLIED", "="+ansiGreen+"APPLIED"+ansiReset,
 	)
 	return replacer.Replace(tableText)
+}
+
+func colorizeSummaryVerdict(summaryLine string) string {
+	replacer := strings.NewReplacer(
+		"highest_verdict=VULNERABLE", "highest_verdict="+ansiRed+"VULNERABLE"+ansiReset,
+		"highest_verdict=LIKELY_VULNERABLE", "highest_verdict="+ansiYellow+"LIKELY_VULNERABLE"+ansiReset,
+		"highest_verdict=UNKNOWN", "highest_verdict="+ansiCyan+"UNKNOWN"+ansiReset,
+		"highest_verdict=PATCHED", "highest_verdict="+ansiGreen+"PATCHED"+ansiReset,
+	)
+	return replacer.Replace(summaryLine)
+}
+
+func colorizeRemediationText(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " ")
+		indent := line[:len(line)-len(trimmed)]
+
+		switch {
+		case strings.HasPrefix(trimmed, "--- ") || (strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "- ")):
+			lines[i] = indent + ansiRed + trimmed + ansiReset
+		case strings.HasPrefix(trimmed, "+++ ") || strings.HasPrefix(trimmed, "+"):
+			lines[i] = indent + ansiGreen + trimmed + ansiReset
+		case strings.HasPrefix(line, "Priority: P0"):
+			lines[i] = "Priority: " + ansiRed + "P0" + ansiReset
+		case strings.HasPrefix(line, "Priority: P1"), strings.HasPrefix(line, "Priority: P2"):
+			p := strings.TrimPrefix(line, "Priority: ")
+			lines[i] = "Priority: " + ansiYellow + p + ansiReset
+		case strings.HasPrefix(line, "Priority: P3"):
+			lines[i] = "Priority: " + ansiCyan + "P3" + ansiReset
+		case strings.HasPrefix(line, "Notes:    WARNING:"):
+			lines[i] = strings.Replace(line, "WARNING:", ansiYellow+"WARNING:"+ansiReset, 1)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func formatMitigationMap(m map[string]match.MitigationStatus) string {

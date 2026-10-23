@@ -299,7 +299,23 @@ func buildCommands(inst inventory.PHPInstall, targetVersion string) ([]Command, 
 		return cmds, strings.Join(notes, " ")
 	}
 
-	// 3. Validate package name if present before interpolating into any package manager command.
+	// 3. Source/custom build under /usr/local with no OS package manager ownership.
+	if inst.PackageManager == "" && inst.PackageName == "" && strings.HasPrefix(inst.BinaryPath, "/usr/local/") {
+		if targetVersion != "" && ValidatePackageToken(strings.ToLower(targetVersion)) == nil {
+			cmds = append(cmds, Command{
+				Label: "Upgrade source/custom PHP build in /usr/local",
+				Text:  fmt.Sprintf("rebuild and install PHP >= %s into /usr/local from official source", strings.ToLower(targetVersion)),
+			})
+		} else {
+			cmds = append(cmds, Command{
+				Label: "Upgrade source/custom PHP build in /usr/local",
+				Text:  "rebuild and install a patched PHP release into /usr/local from official source",
+			})
+		}
+		return cmds, strings.Join(notes, " ")
+	}
+
+	// 4. Validate package name if present before interpolating into any package manager command.
 	pkgName := inst.PackageName
 	if pkgName != "" {
 		if err := ValidatePackageToken(pkgName); err != nil {

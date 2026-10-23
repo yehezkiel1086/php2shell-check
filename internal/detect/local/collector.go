@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -158,6 +159,9 @@ func (c *HostCollector) discoverBinaryPaths() ([]string, []string) {
 		if relDir == "" || relDir == "." {
 			continue
 		}
+		if runtime.GOOS != "windows" && isWSLMountPath(relDir) {
+			continue
+		}
 		globs = append(globs,
 			path.Join(relDir, "php*"),
 			path.Join(relDir, "frankenphp*"),
@@ -276,12 +280,15 @@ func (c *HostCollector) inspectBinary(ctx context.Context, relPath string, distr
 	inst.AddEvidence(fmt.Sprintf("version_cmd: %s -v => %s", absPath, rawVer))
 
 	if sapi == inventory.SAPICLI {
-		c.inspectCLIInfo(ctx, absPath, &inst)
+		c.inspectPHPInfo(ctx, absPath, "php -i", &inst)
 	}
 
 	if parsedVer, err := phpver.Parse(upstreamVer); err == nil {
 		if sapi == inventory.SAPIFPM {
 			c.inspectFPMStaticConfigs(parsedVer.Branch, absPath, &inst)
+			if len(inst.IniSettings) == 0 {
+				c.inspectPHPInfo(ctx, absPath, "php-fpm -i", &inst)
+			}
 		}
 	}
 
@@ -289,7 +296,7 @@ func (c *HostCollector) inspectBinary(ctx context.Context, relPath string, distr
 	return inst, true
 }
 
-func (c *HostCollector) inspectCLIInfo(ctx context.Context, absPath string, inst *inventory.PHPInstall) {
+func (c *HostCollector) inspectPHPInfo(ctx context.Context, absPath, sourceLabel string, inst *inventory.PHPInstall) {
 	stdout, _, err := c.runner.Run(ctx, absPath, "-i")
 	if err != nil {
 		if isPermissionError(err) {
@@ -319,7 +326,7 @@ func (c *HostCollector) inspectCLIInfo(ctx context.Context, absPath string, inst
 	}
 
 	for k, v := range infoRes.IniSettings {
-		inst.SetIniSetting(k, v, "php -i")
+		inst.SetIniSetting(k, v, sourceLabel)
 	}
 }
 
@@ -585,7 +592,11 @@ func splitApkPackageVersion(token string) (string, string, bool) {
 }
 
 func isCandidatePHPBinary(base string) bool {
-	lower := strings.ToLower(strings.TrimSuffix(base, ".exe"))
+	lowerBase := strings.ToLower(base)
+	if runtime.GOOS != "windows" && strings.HasSuffix(lowerBase, ".exe") {
+		return false
+	}
+	lower := strings.TrimSuffix(lowerBase, ".exe")
 	if lower == "" {
 		return false
 	}
@@ -616,6 +627,22 @@ func isCandidatePHPBinary(base string) bool {
 	return strings.HasPrefix(lower, "php") ||
 		strings.HasPrefix(lower, "frankenphp") ||
 		strings.HasPrefix(lower, "lsphp")
+}
+
+// isWSLMountPath reports whether a relative root-fs path is under a Windows WSL drive mount (e.g. "mnt/c/...").
+func isWSLMountPath(relDir string) bool {
+	lower := strings.ToLower(strings.TrimPrefix(relDir, "/"))
+	if !strings.HasPrefix(lower, "mnt/") {
+		return false
+	}
+	rest := lower[len("mnt/"):]
+	if len(rest) == 1 && rest[0] >= 'a' && rest[0] <= 'z' {
+		return true
+	}
+	if len(rest) >= 2 && rest[0] >= 'a' && rest[0] <= 'z' && rest[1] == '/' {
+		return true
+	}
+	return false
 }
 
 func splitPathEnv(pathEnv string) []string {
