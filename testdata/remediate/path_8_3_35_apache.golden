@@ -1,0 +1,10 @@
+Priority: P0
+Title:    [P0] Remediate Dockerfile:1 (VULNERABLE, SAPI: apache2handler)
+Steps:
+  1. Upgrade the container image tag on branch 8.3 from php:8.3.35-apache to php:8.3.36-apache.
+  2. config mitigation cannot be assessed from build files, scan the built image
+Commands:
+  [Update container base image] bump the base image tag to php:8.3.36-apache
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image

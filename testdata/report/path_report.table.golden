@@ -1,0 +1,78 @@
+TARGET                       SAPI             VERSION                      VERDICT     FIXED IN  MITIGATION  REASON
+03-vuln/Dockerfile:1         apache2handler*  8.3.35                       VULNERABLE  8.3.36    UNKNOWN     upstream version 8.3.35 < branch fix 8.3.36
+06-phpver/.php-version:1     cli              8.3.35                       VULNERABLE  8.3.36    UNKNOWN     upstream version 8.3.35 < branch fix 8.3.36
+01-dvwa/Dockerfile:1         apache2handler*  unresolved (php:8-apache)    UNKNOWN     -         UNKNOWN     floating version constraint or tag "php:8-apache" cannot prove a patched version; pin to FixedIn version or scan the resolved image digest
+02-branch/Dockerfile:1       apache2handler*  unresolved (php:8.3-apache)  UNKNOWN     8.3.36    UNKNOWN     floating version constraint or tag "php:8.3-apache" cannot prove a patched version; pin to 8.3.36 or scan the resolved image digest
+05-composer/composer.json:3  unknown          ^8.2                         UNKNOWN     8.2.35    UNKNOWN     floating version constraint or tag "^8.2" cannot prove a patched version; pin to 8.2.35 or scan the resolved image digest
+04-patch/Dockerfile:1        apache2handler*  8.3.36                       PATCHED     8.3.36    UNKNOWN     upstream version 8.3.36 >= branch fix 8.3.36
+* inferred from image tag
+
+Summary: total=6 vulnerable=2 likely_vulnerable=0 unknown=3 patched=1 highest_verdict=VULNERABLE
+Path mode reports what the repository declares, not what is running.
+
+Remediation Guidance:
+Priority: P0
+Title:    [P0] Remediate 03-vuln/Dockerfile:1 (VULNERABLE, SAPI: apache2handler)
+Steps:
+  1. Upgrade the container image tag on branch 8.3 from php:8.3.35-apache to php:8.3.36-apache.
+  2. config mitigation cannot be assessed from build files, scan the built image
+Commands:
+  [Update container base image] bump the base image tag to php:8.3.36-apache
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image
+
+Priority: P2
+Title:    [P2] Remediate 06-phpver/.php-version:1 (VULNERABLE, SAPI: cli)
+Steps:
+  1. Update 06-phpver/.php-version:1 to the fixed version for branch 8.3 (8.3.36), and verify manually by scanning the built image or deployed runtime.
+  2. config mitigation cannot be assessed from build files, scan the built image
+Commands:
+  [Pin PHP version] set PHP version to 8.3.36
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image
+
+Priority: P3
+Title:    Verify PHP installation manually for 01-dvwa/Dockerfile:1
+Steps:
+  1. php2shell-check scan image php:8-apache — resolve the floating tag and inspect the built image (verify manually).
+  2. Pin the image tag to a fixed release (php:8.2.35-apache, php:8.3.36-apache, php:8.4.27-apache, php:8.5.12-apache — choose the branch your application is tested on) and pin by digest after scanning the resolved image digest.
+  3. config mitigation cannot be assessed from build files, scan the built image
+Commands:
+  [Scan resolved image] php2shell-check scan image php:8-apache
+  [Update container base image] bump the base image tag to one of: php:8.2.35-apache, php:8.3.36-apache, php:8.4.27-apache, php:8.5.12-apache (choose the branch your application is tested on)
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image
+
+Priority: P3
+Title:    Verify PHP installation manually for 02-branch/Dockerfile:1
+Steps:
+  1. php2shell-check scan image php:8.3-apache — resolve the floating tag and inspect the built image (verify manually).
+  2. Pin the image tag to php:8.3.36-apache and pin by digest (@sha256:...) after an image scan (scan the resolved image digest).
+  3. config mitigation cannot be assessed from build files, scan the built image
+Commands:
+  [Scan resolved image] php2shell-check scan image php:8.3-apache
+  [Update container base image] bump the base image tag to php:8.3.36-apache
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image
+
+Priority: P3
+Title:    Verify PHP installation manually for 05-composer/composer.json:3
+Steps:
+  1. A composer.json constraint is not an installed version and composer platform settings don't change the runtime; pin the runtime PHP version (e.g. >= 8.2.35) and scan the built image (verify manually).
+  2. config mitigation cannot be assessed from build files, scan the built image
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image
+
+Priority: P3
+Title:    No remediation required for 04-patch/Dockerfile:1 (PATCHED)
+Steps:
+  1. Declared container image tag php:8.3.36-apache meets or exceeds the patched version threshold (8.3.36).
+  2. config mitigation cannot be assessed from build files, scan the built image
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image

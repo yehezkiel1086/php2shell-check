@@ -1,0 +1,12 @@
+Priority: P3
+Title:    Verify PHP installation manually for Dockerfile:1
+Steps:
+  1. php2shell-check scan image php:8-apache — resolve the floating tag and inspect the built image (verify manually).
+  2. Pin the image tag to a fixed release (php:8.2.35-apache, php:8.3.36-apache, php:8.4.27-apache, php:8.5.12-apache — choose the branch your application is tested on) and pin by digest after scanning the resolved image digest.
+  3. config mitigation cannot be assessed from build files, scan the built image
+Commands:
+  [Scan resolved image] php2shell-check scan image php:8-apache
+  [Update container base image] bump the base image tag to one of: php:8.2.35-apache, php:8.3.36-apache, php:8.4.27-apache, php:8.5.12-apache (choose the branch your application is tested on)
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image

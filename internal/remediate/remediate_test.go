@@ -1,6 +1,7 @@
 package remediate_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
+	"github.com/yehezkiel1086/php2shell-check/internal/detect/path"
 	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 	"github.com/yehezkiel1086/php2shell-check/internal/match"
 	"github.com/yehezkiel1086/php2shell-check/internal/remediate"
@@ -321,5 +323,246 @@ func TestPathAndRemoteRemediationGuidance(t *testing.T) {
 	remoteText := remediate.FormatText(remoteRec)
 	if !strings.Contains(remoteText, "expose_php = Off") {
 		t.Errorf("remote remediation missing expose_php=Off hardening:\n%s", remoteText)
+	}
+}
+
+func assertGolden(t *testing.T, name, got string) {
+	t.Helper()
+	p := filepath.Join("..", "..", "testdata", "remediate", name)
+	gotNorm := strings.ReplaceAll(got, "\r\n", "\n")
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatalf("mkdir golden dir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte(gotNorm), 0o600); err != nil {
+			t.Fatalf("write golden file %s: %v", name, err)
+		}
+	}
+	want := readGolden(t, name)
+	if gotNorm != want {
+		t.Fatalf("FormatText mismatch vs %s\ngot:\n%s\nwant:\n%s", name, gotNorm, want)
+	}
+}
+
+func TestPathModeGoldenAndInvariants(t *testing.T) {
+	t.Parallel()
+
+	adv := mustLoadSeedAdvisory(t)
+
+	type pathCase struct {
+		name       string
+		files      map[string]string
+		goldenFile string
+		 floating   bool
+	}
+
+	cases := []pathCase{
+		{
+			name: "FROM docker.io/library/php:8-apache",
+			files: map[string]string{
+				"Dockerfile": "FROM docker.io/library/php:8-apache\n",
+			},
+			goldenFile: "path_8_apache.golden",
+			floating:   true,
+		},
+		{
+			name: "FROM php:8.3-apache",
+			files: map[string]string{
+				"Dockerfile": "FROM php:8.3-apache\n",
+			},
+			goldenFile: "path_8_3_apache.golden",
+			floating:   true,
+		},
+		{
+			name: "FROM php:8.3.35-apache",
+			files: map[string]string{
+				"Dockerfile": "FROM php:8.3.35-apache\n",
+			},
+			goldenFile: "path_8_3_35_apache.golden",
+			floating:   false,
+		},
+		{
+			name: "FROM php:8.3.36-apache",
+			files: map[string]string{
+				"Dockerfile": "FROM php:8.3.36-apache\n",
+			},
+			goldenFile: "path_8_3_36_apache.golden",
+			floating:   false,
+		},
+		{
+			name: "composer.json with ^8.2",
+			files: map[string]string{
+				"composer.json": "{\n  \"require\": {\n    \"php\": \"^8.2\"\n  }\n}\n",
+			},
+			goldenFile: "path_composer_8_2.golden",
+			floating:   false,
+		},
+		{
+			name: ".php-version containing 8.3.35",
+			files: map[string]string{
+				".php-version": "8.3.35\n",
+			},
+			goldenFile: "path_php_version_8_3_35.golden",
+			floating:   false,
+		},
+		{
+			name: "compose build context with Dockerfile",
+			files: map[string]string{
+				"Dockerfile":         "FROM php:8-apache\n",
+				"docker-compose.yml": "services:\n  web:\n    build: .\n",
+			},
+			goldenFile: "path_compose_build.golden",
+			floating:   true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			for relPath, content := range tc.files {
+				full := filepath.Join(dir, filepath.FromSlash(relPath))
+				if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+					t.Fatalf("write %s: %v", relPath, err)
+				}
+			}
+
+			col := path.NewCollector(path.Options{RootPath: dir})
+			installs, err := col.Collect(context.Background())
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if len(installs) != 1 {
+				t.Fatalf("expected 1 install, got %d: %+v", len(installs), installs)
+			}
+
+			finding := match.Evaluate(installs[0], adv)
+			rec := remediate.Build(finding, adv, remediate.Options{})
+			text := remediate.FormatText(rec)
+
+			assertGolden(t, tc.goldenFile, text)
+
+			// Invariant 1: no systemctl and no config diff in any path finding.
+			if strings.Contains(text, "systemctl") {
+				t.Errorf("path finding remediation must never contain systemctl:\n%s", text)
+			}
+			for _, forbidden := range []string{"--- a/php.ini", "+++ b/php.ini", "session.upload_progress.enabled", "fatal_error_backtraces"} {
+				if strings.Contains(text, forbidden) {
+					t.Errorf("path finding remediation must never contain config diff (%q):\n%s", forbidden, text)
+				}
+			}
+			if !strings.Contains(text, remediate.PathMitigationNotice) {
+				t.Errorf("path finding remediation missing %q:\n%s", remediate.PathMitigationNotice, text)
+			}
+			if !strings.Contains(text, remediate.PathRestartHint) {
+				t.Errorf("path finding remediation missing %q:\n%s", remediate.PathRestartHint, text)
+			}
+
+			// Invariant 2: displayed refs never contain docker.io/library/.
+			if strings.Contains(text, "docker.io/library/") {
+				t.Errorf("displayed remediation text must never contain docker.io/library/:\n%s", text)
+			}
+
+			// Invariant 3: first remediation step for floating tags is the scan image command.
+			if tc.floating {
+				if len(rec.Steps) == 0 || !strings.HasPrefix(rec.Steps[0], "php2shell-check scan image ") {
+					t.Errorf("first remediation step for floating tag must be scan image command, got: %v", rec.Steps)
+				}
+			}
+		})
+	}
+
+	// Verify 8-apache lists all branches from the data file dynamically (never hardcoded).
+	tBool := true
+	customAdv := adv
+	customAdv.Branches = append(append([]advisory.BranchAdvisory(nil), adv.Branches...), advisory.BranchAdvisory{
+		Branch:               "8.6",
+		FixedIn:              "8.6.2",
+		UpstreamFixAvailable: &tBool,
+	})
+	f8 := match.Evaluate(inventory.PHPInstall{
+		BinaryPath:      "Dockerfile:1",
+		UpstreamVersion: "docker.io/library/php:8-apache",
+		PackageManager:  "container",
+		PackageName:     "docker.io/library/php",
+		SAPI:            inventory.SAPIApache2Handler,
+		Source:          inventory.SourcePath,
+		Confidence:      inventory.ConfidenceMedium,
+		Evidence:        []string{"Dockerfile:1 -> FROM docker.io/library/php:8-apache"},
+	}, customAdv)
+	rec8 := remediate.Build(f8, customAdv, remediate.Options{})
+	text8 := remediate.FormatText(rec8)
+	for _, wantTag := range []string{
+		"php:8.2.35-apache",
+		"php:8.3.36-apache",
+		"php:8.4.27-apache",
+		"php:8.5.12-apache",
+		"php:8.6.2-apache",
+		remediate.PathBranchChoiceNotice,
+	} {
+		if !strings.Contains(text8, wantTag) {
+			t.Errorf("8-apache remediation missing %q:\n%s", wantTag, text8)
+		}
+	}
+
+	// Cover additional path-mode branches: EOL container tag, major-only composer constraint,
+	// patched .php-version, EOL .php-version, compose image evidence, and IncludeHuntHints.
+	extraInstalls := []inventory.PHPInstall{
+		{
+			BinaryPath:      "Dockerfile:1",
+			UpstreamVersion: "8.1.30",
+			PackageManager:  "container",
+			PackageName:     "php:8.1.30-apache",
+			SAPI:            inventory.SAPIApache2Handler,
+			Source:          inventory.SourcePath,
+		},
+		{
+			BinaryPath:      "docker-compose.yml:3",
+			UpstreamVersion: "8.3.35",
+			PackageManager:  "container",
+			SAPI:            inventory.SAPICLI,
+			Source:          inventory.SourcePath,
+			Evidence:        []string{"docker-compose.yml:3 -> image: php:8.3.35-cli"},
+		},
+		{
+			BinaryPath:      "composer.json:3",
+			UpstreamVersion: "^8",
+			PackageManager:  "composer",
+			Source:          inventory.SourcePath,
+		},
+		{
+			BinaryPath:      ".php-version:1",
+			UpstreamVersion: "8.3.36",
+			SAPI:            inventory.SAPICLI,
+			Source:          inventory.SourcePath,
+		},
+		{
+			BinaryPath:      ".tool-versions:1",
+			UpstreamVersion: "8.1.30",
+			SAPI:            inventory.SAPICLI,
+			Source:          inventory.SourcePath,
+		},
+		{
+			BinaryPath:      "/usr/local/bin/php",
+			UpstreamVersion: "8.3.35",
+			SAPI:            inventory.SAPILiteSpeed,
+			Source:          inventory.SourceLocal,
+		},
+		{
+			BinaryPath:      "/usr/bin/frankenphp",
+			UpstreamVersion: "8.3.36",
+			SAPI:            inventory.SAPIFrankenPHP,
+			Source:          inventory.SourceRemote,
+		},
+	}
+	for _, inst := range extraInstalls {
+		f := match.Evaluate(inst, adv)
+		r := remediate.Build(f, adv, remediate.Options{IncludeHuntHints: true})
+		if r.Title == "" {
+			t.Errorf("empty title for %+v", inst)
+		}
 	}
 }

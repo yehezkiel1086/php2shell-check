@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 // SAPI represents the PHP Server API type of a discovered installation.
@@ -102,4 +103,22 @@ func (p *PHPInstall) SetIniSetting(key, value, origin string) {
 	}
 	p.IniSettings[key] = value
 	p.AddEvidence(fmt.Sprintf("ini:%s=%s (source: %s)", key, value, origin))
+}
+
+// NormalizeImageRef strips default Docker Hub library prefixes (such as docker.io/library/,
+// index.docker.io/library/, registry-1.docker.io/library/, and library/) for display.
+func NormalizeImageRef(ref string) string {
+	s := strings.TrimSpace(ref)
+	lower := strings.ToLower(s)
+	for _, prefix := range []string{
+		"index.docker.io/library/",
+		"docker.io/library/",
+		"registry-1.docker.io/library/",
+		"library/",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return s[len(prefix):]
+		}
+	}
+	return s
 }

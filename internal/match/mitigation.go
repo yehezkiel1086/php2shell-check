@@ -9,6 +9,12 @@ import (
 
 func evaluateMitigations(inst inventory.PHPInstall, branch string, adv advisory.Advisory) map[string]MitigationStatus {
 	result := make(map[string]MitigationStatus, len(adv.CVEs))
+	if inst.Source == inventory.SourcePath {
+		for _, cve := range adv.CVEs {
+			result[cve] = MitigationUnknown
+		}
+		return result
+	}
 
 	for _, cve := range adv.CVEs {
 		applicable := applicableMitigationsForCVE(cve, branch, adv.Mitigations)

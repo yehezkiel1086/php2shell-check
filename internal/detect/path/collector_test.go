@@ -121,3 +121,54 @@ func keys(m map[string]inventory.PHPInstall) []string {
 	}
 	return out
 }
+
+func TestComposeBuildContextDeduplicationAndNormalizeRef(t *testing.T) {
+	t.Parallel()
+
+	if got := NormalizeImageRef("docker.io/library/php:8-apache"); got != "php:8-apache" {
+		t.Errorf("NormalizeImageRef = %q, want php:8-apache", got)
+	}
+	if got := NormalizeImageRef("index.docker.io/library/php:8.3-fpm"); got != "php:8.3-fpm" {
+		t.Errorf("NormalizeImageRef = %q, want php:8.3-fpm", got)
+	}
+
+	rootDir := t.TempDir()
+	dvwaDir := filepath.Join(rootDir, "dvwa")
+	if err := os.MkdirAll(dvwaDir, 0o750); err != nil {
+		t.Fatalf("mkdir dvwa: %v", err)
+	}
+
+	dockerfileContent := "FROM docker.io/library/php:8-apache\n"
+	if err := os.WriteFile(filepath.Join(dvwaDir, "Dockerfile"), []byte(dockerfileContent), 0o600); err != nil {
+		t.Fatalf("write Dockerfile: %v", err)
+	}
+
+	composeContent := "services:\n  dvwa:\n    build:\n      context: ./dvwa\n      dockerfile: Dockerfile\n    image: php:8-apache\n"
+	if err := os.WriteFile(filepath.Join(rootDir, "docker-compose.yml"), []byte(composeContent), 0o600); err != nil {
+		t.Fatalf("write docker-compose.yml: %v", err)
+	}
+
+	col := NewCollector(Options{RootPath: rootDir})
+	installs, err := col.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect error: %v", err)
+	}
+
+	if len(installs) != 1 {
+		t.Fatalf("expected 1 deduplicated install for compose build context, got %d: %+v", len(installs), installs)
+	}
+
+	inst := installs[0]
+	if inst.UpstreamVersion != "docker.io/library/php:8-apache" {
+		t.Errorf("UpstreamVersion = %q, want full ref docker.io/library/php:8-apache", inst.UpstreamVersion)
+	}
+	if len(inst.Evidence) != 2 {
+		t.Fatalf("expected 2 evidence entries (Dockerfile + compose build), got %d: %v", len(inst.Evidence), inst.Evidence)
+	}
+	if inst.Evidence[0] != "dvwa/Dockerfile:1 -> FROM docker.io/library/php:8-apache" {
+		t.Errorf("Evidence[0] = %q", inst.Evidence[0])
+	}
+	if !strings.HasPrefix(inst.Evidence[1], "docker-compose.yml:3 -> build:") {
+		t.Errorf("Evidence[1] = %q, want docker-compose.yml:3 -> build:...", inst.Evidence[1])
+	}
+}

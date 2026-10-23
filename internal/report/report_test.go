@@ -2,6 +2,7 @@ package report_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/owenrumney/go-sarif/v2/sarif"
 
 	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
+	"github.com/yehezkiel1086/php2shell-check/internal/detect/path"
 	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 	"github.com/yehezkiel1086/php2shell-check/internal/match"
 	"github.com/yehezkiel1086/php2shell-check/internal/remediate"
@@ -282,5 +284,116 @@ func TestTableColorQuietAndSecretRedaction(t *testing.T) {
 	}
 	if decoded.SchemaVersion != report.SchemaVersion {
 		t.Errorf("decoded SchemaVersion = %q, want %q", decoded.SchemaVersion, report.SchemaVersion)
+	}
+}
+
+func TestPathModeReportGoldenAndAssertions(t *testing.T) {
+	t.Parallel()
+
+	adv, err := advisory.LoadEmbedded()
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+
+	rootDir := t.TempDir()
+	files := map[string]string{
+		"01-dvwa/Dockerfile":   "FROM docker.io/library/php:8-apache\n",
+		"02-branch/Dockerfile": "FROM php:8.3-apache\n",
+		"03-vuln/Dockerfile":   "FROM php:8.3.35-apache\n",
+		"04-patch/Dockerfile":  "FROM php:8.3.36-apache\n",
+		"05-composer/composer.json": "{\n  \"require\": {\n    \"php\": \"^8.2\"\n  }\n}\n",
+		"06-phpver/.php-version":    "8.3.35\n",
+		"07-compose/docker-compose.yml": "services:\n  dvwa:\n    build: ../01-dvwa\n",
+	}
+
+	for relPath, content := range files {
+		full := filepath.Join(rootDir, filepath.FromSlash(relPath))
+		if mkErr := os.MkdirAll(filepath.Dir(full), 0o750); mkErr != nil {
+			t.Fatalf("mkdir: %v", mkErr)
+		}
+		if wErr := os.WriteFile(full, []byte(content), 0o600); wErr != nil {
+			t.Fatalf("write %s: %v", relPath, wErr)
+		}
+	}
+
+	col := path.NewCollector(path.Options{RootPath: rootDir})
+	installs, err := col.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	// 07-compose/docker-compose.yml builds ../01-dvwa/Dockerfile, so it must be deduplicated into 01-dvwa/Dockerfile (6 installs total).
+	if len(installs) != 6 {
+		t.Fatalf("expected 6 installs (with compose build deduplicated), got %d: %+v", len(installs), installs)
+	}
+
+	findings := match.EvaluateAll(installs, adv)
+	recs := remediate.BuildAll(findings, adv, remediate.Options{})
+	rep := report.Build(findings, recs, adv, report.Options{
+		ToolVersion: "0.1.0-test",
+		Mode:        "path",
+	})
+
+	var tableBuf, jsonBuf bytes.Buffer
+	if err := report.Render(&tableBuf, rep, report.Options{Format: report.FormatTable, NoColor: true}); err != nil {
+		t.Fatalf("Render(table): %v", err)
+	}
+	if err := report.Render(&jsonBuf, rep, report.Options{Format: report.FormatJSON, NoColor: true}); err != nil {
+		t.Fatalf("Render(json): %v", err)
+	}
+
+	tableOut := tableBuf.String()
+
+	assertGolden(t, "path_report.table.golden", tableOut)
+
+	// Assertions on table display:
+	if strings.Contains(tableOut, "docker.io/library/") {
+		t.Errorf("displayed table must never contain docker.io/library/:\n%s", tableOut)
+	}
+	if strings.Contains(tableOut, "systemctl") {
+		t.Errorf("path report must never contain systemctl:\n%s", tableOut)
+	}
+	if strings.Contains(tableOut, "--- a/php.ini") || strings.Contains(tableOut, "fatal_error_backtraces") {
+		t.Errorf("path report must never contain config diff:\n%s", tableOut)
+	}
+	for _, wantSub := range []string{
+		"unresolved (php:8-apache)",
+		"unresolved (php:8.3-apache)",
+		"apache2handler*",
+		report.InferredSAPIFootnote,
+		report.PathModeSummaryNote,
+		remediate.PathMitigationNotice,
+		remediate.PathRestartHint,
+		"php:8.2.35-apache, php:8.3.36-apache, php:8.4.27-apache, php:8.5.12-apache",
+		remediate.PathBranchChoiceNotice,
+	} {
+		if !strings.Contains(tableOut, wantSub) {
+			t.Errorf("table output missing %q:\n%s", wantSub, tableOut)
+		}
+	}
+
+	// JSON must preserve the full ref docker.io/library/php:8-apache and both Evidence locations for 01-dvwa/Dockerfile.
+	var decoded report.Report
+	if err := json.Unmarshal(jsonBuf.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal JSON report: %v", err)
+	}
+	foundDvwa := false
+	for _, r := range decoded.Results {
+		if r.Finding.Install.BinaryPath == "01-dvwa/Dockerfile:1" {
+			foundDvwa = true
+			if r.Finding.Install.UpstreamVersion != "docker.io/library/php:8-apache" {
+				t.Errorf("JSON UpstreamVersion = %q, want docker.io/library/php:8-apache", r.Finding.Install.UpstreamVersion)
+			}
+			evJoined := strings.Join(r.Finding.Install.Evidence, "\n")
+			if !strings.Contains(evJoined, "01-dvwa/Dockerfile:1 -> FROM docker.io/library/php:8-apache") {
+				t.Errorf("JSON evidence missing exact FROM line: %v", r.Finding.Install.Evidence)
+			}
+			if !strings.Contains(evJoined, "07-compose/docker-compose.yml:3 -> build: ../01-dvwa") {
+				t.Errorf("JSON evidence missing compose build location: %v", r.Finding.Install.Evidence)
+			}
+		}
+	}
+	if !foundDvwa {
+		t.Errorf("01-dvwa/Dockerfile:1 finding not found in decoded JSON report")
 	}
 }

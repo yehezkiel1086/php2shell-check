@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 	"github.com/yehezkiel1086/php2shell-check/internal/remediate"
 )
 
@@ -30,6 +31,9 @@ func RenderMarkdown(w io.Writer, rep Report, _ Options) error {
 	_, _ = fmt.Fprintf(&b, "| `UNKNOWN` | %d |\n", rep.Summary.Unknown)
 	_, _ = fmt.Fprintf(&b, "| `PATCHED` | %d |\n", rep.Summary.Patched)
 	_, _ = fmt.Fprintf(&b, "| **Highest Severity Verdict** | `%s` |\n\n", rep.Summary.HighestVerdict)
+	if isPathReport(rep) {
+		_, _ = fmt.Fprintf(&b, "> **Note:** %s\n\n", PathModeSummaryNote)
+	}
 
 	_, _ = fmt.Fprintln(&b, "## Findings Overview")
 	_, _ = fmt.Fprintln(&b)
@@ -39,47 +43,57 @@ func RenderMarkdown(w io.Writer, rep Report, _ Options) error {
 	} else {
 		_, _ = fmt.Fprintln(&b, "| Target | SAPI | Version | Verdict | Fixed In | Mitigation | Priority |")
 		_, _ = fmt.Fprintln(&b, "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+		hasInferredSAPI := false
 		for _, item := range rep.Results {
 			f := item.Finding
 			fixedIn := f.FixedIn
 			if fixedIn == "" {
 				fixedIn = "-"
 			}
-			ver := f.Install.UpstreamVersion
-			if ver == "" {
-				ver = "unknown"
+			sapiStr, inferred := displaySAPI(f)
+			if inferred {
+				hasInferredSAPI = true
 			}
+			ver := displayVersion(f)
 			_, _ = fmt.Fprintf(
 				&b,
 				"| `%s` | `%s` | `%s` | **`%s`** | `%s` | `%s` | `%s` |\n",
 				primaryTarget(f),
-				f.Install.SAPI,
+				sapiStr,
 				ver,
 				f.Verdict,
 				fixedIn,
-				formatMitigationMap(f.Mitigation),
+				displayMitigation(f),
 				item.Recommendation.Priority,
 			)
 		}
 		_, _ = fmt.Fprintln(&b)
+		if hasInferredSAPI {
+			_, _ = fmt.Fprintf(&b, "_%s_\n\n", InferredSAPIFootnote)
+		}
 
 		_, _ = fmt.Fprintln(&b, "## Per-Finding Evidence & Remediation")
 		_, _ = fmt.Fprintln(&b)
 		for i, item := range rep.Results {
 			f := item.Finding
 			rec := item.Recommendation
+			sapiStr, _ := displaySAPI(f)
 			_, _ = fmt.Fprintf(&b, "### %d. `%s` (%s)\n\n", i+1, primaryTarget(f), f.Verdict)
 			_, _ = fmt.Fprintf(&b, "- **Priority:** `%s`\n", rec.Priority)
-			_, _ = fmt.Fprintf(&b, "- **SAPI:** `%s`\n", f.Install.SAPI)
-			_, _ = fmt.Fprintf(&b, "- **Upstream Version:** `%s`\n", f.Install.UpstreamVersion)
+			_, _ = fmt.Fprintf(&b, "- **SAPI:** `%s`\n", sapiStr)
+			upstreamVer := inventory.NormalizeImageRef(f.Install.UpstreamVersion)
+			if f.Install.Source == inventory.SourcePath && upstreamVer != "" {
+				upstreamVer = displayVersion(f)
+			}
+			_, _ = fmt.Fprintf(&b, "- **Upstream Version:** `%s`\n", upstreamVer)
 			if f.Install.PackageName != "" {
-				_, _ = fmt.Fprintf(&b, "- **Package:** `%s` (`%s`, manager: `%s`)\n", f.Install.PackageName, f.Install.PackageVersion, f.Install.PackageManager)
+				_, _ = fmt.Fprintf(&b, "- **Package:** `%s` (`%s`, manager: `%s`)\n", inventory.NormalizeImageRef(f.Install.PackageName), f.Install.PackageVersion, f.Install.PackageManager)
 			}
 			if f.Install.Distro.ID != "" {
 				_, _ = fmt.Fprintf(&b, "- **Distribution:** `%s %s`\n", f.Install.Distro.ID, f.Install.Distro.VersionID)
 			}
 			_, _ = fmt.Fprintf(&b, "- **Reason:** %s\n", f.Reason)
-			_, _ = fmt.Fprintf(&b, "- **Mitigation Status:** `%s`\n\n", formatMitigationMap(f.Mitigation))
+			_, _ = fmt.Fprintf(&b, "- **Mitigation Status:** `%s`\n\n", displayMitigation(f))
 
 			if len(f.Install.Evidence) > 0 {
 				_, _ = fmt.Fprintln(&b, "#### Evidence")

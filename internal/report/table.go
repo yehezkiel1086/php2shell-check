@@ -8,9 +8,17 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
 	"github.com/yehezkiel1086/php2shell-check/internal/match"
+	"github.com/yehezkiel1086/php2shell-check/internal/phpver"
 	"github.com/yehezkiel1086/php2shell-check/internal/remediate"
 )
+
+// PathModeSummaryNote is the required summary note displayed for path scans.
+const PathModeSummaryNote = "Path mode reports what the repository declares, not what is running."
+
+// InferredSAPIFootnote is the footnote printed when SAPI is inferred from an image tag.
+const InferredSAPIFootnote = "* inferred from image tag"
 
 const (
 	ansiReset  = "\x1b[0m"
@@ -31,6 +39,7 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 		var tableBuf bytes.Buffer
 		tw := tabwriter.NewWriter(&tableBuf, 0, 0, 2, ' ', 0)
 		_, _ = fmt.Fprintln(tw, "TARGET\tSAPI\tVERSION\tVERDICT\tFIXED IN\tMITIGATION\tREASON")
+		hasInferredSAPI := false
 		for _, item := range rep.Results {
 			f := item.Finding
 			target := primaryTarget(f)
@@ -38,16 +47,17 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 			if fixedIn == "" {
 				fixedIn = "-"
 			}
-			ver := f.Install.UpstreamVersion
-			if ver == "" {
-				ver = "unknown"
+			sapiStr, inferred := displaySAPI(f)
+			if inferred {
+				hasInferredSAPI = true
 			}
-			mitStr := formatMitigationMap(f.Mitigation)
+			ver := displayVersion(f)
+			mitStr := displayMitigation(f)
 			_, _ = fmt.Fprintf(
 				tw,
 				"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				target,
-				f.Install.SAPI,
+				sapiStr,
 				ver,
 				f.Verdict,
 				fixedIn,
@@ -64,6 +74,9 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 			renderedTable = colorizeVerdicts(renderedTable)
 		}
 		_, _ = buf.WriteString(renderedTable)
+		if hasInferredSAPI {
+			_, _ = fmt.Fprintf(&buf, "%s\n", InferredSAPIFootnote)
+		}
 	}
 
 	summaryLine := fmt.Sprintf(
@@ -79,6 +92,9 @@ func RenderTable(w io.Writer, rep Report, opts Options) error {
 		summaryLine = colorizeSummaryVerdict(summaryLine)
 	}
 	_, _ = buf.WriteString(summaryLine)
+	if isPathReport(rep) {
+		_, _ = fmt.Fprintf(&buf, "%s\n", PathModeSummaryNote)
+	}
 
 	if !opts.Quiet && len(rep.Results) > 0 {
 		_, _ = fmt.Fprintln(&buf, "\nRemediation Guidance:")
@@ -168,4 +184,48 @@ func formatMitigationMap(m map[string]match.MitigationStatus) string {
 		parts = append(parts, fmt.Sprintf("%s=%s", k, m[k]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func displayVersion(f match.Finding) string {
+	ver := strings.TrimSpace(f.Install.UpstreamVersion)
+	if ver == "" {
+		return "unknown"
+	}
+	norm := inventory.NormalizeImageRef(ver)
+	if f.Install.Source == inventory.SourcePath && f.Install.PackageManager == "container" {
+		if _, err := phpver.Parse(ver); err != nil {
+			return fmt.Sprintf("unresolved (%s)", norm)
+		}
+	}
+	return norm
+}
+
+func displaySAPI(f match.Finding) (string, bool) {
+	sapi := string(f.Install.SAPI)
+	if f.Install.Source == inventory.SourcePath &&
+		f.Install.PackageManager == "container" &&
+		f.Install.SAPI != "" &&
+		f.Install.SAPI != inventory.SAPIUnknown {
+		return sapi + "*", true
+	}
+	return sapi, false
+}
+
+func displayMitigation(f match.Finding) string {
+	if f.Install.Source == inventory.SourcePath {
+		return string(match.MitigationUnknown)
+	}
+	return formatMitigationMap(f.Mitigation)
+}
+
+func isPathReport(rep Report) bool {
+	if strings.EqualFold(rep.Mode, "path") {
+		return true
+	}
+	for _, item := range rep.Results {
+		if item.Finding.Install.Source == inventory.SourcePath {
+			return true
+		}
+	}
+	return false
 }

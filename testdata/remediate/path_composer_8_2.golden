@@ -1,0 +1,8 @@
+Priority: P3
+Title:    Verify PHP installation manually for composer.json:3
+Steps:
+  1. A composer.json constraint is not an installed version and composer platform settings don't change the runtime; pin the runtime PHP version (e.g. >= 8.2.35) and scan the built image (verify manually).
+  2. config mitigation cannot be assessed from build files, scan the built image
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image

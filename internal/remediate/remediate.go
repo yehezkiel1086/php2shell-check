@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
@@ -28,6 +29,23 @@ const MitigationWarning = "WARNING: A configuration mitigation is a temporary ri
 
 // HuntDisclaimer is the mandatory label for passive log-review indicators.
 const HuntDisclaimer = "Indicators of known samples only; absence of matches in logs is NOT proof of safety."
+
+// PathMitigationNotice is the mandatory mitigation message for Source=path findings.
+const PathMitigationNotice = "config mitigation cannot be assessed from build files, scan the built image"
+
+// PathRestartHint is the mandatory restart hint for Source=path findings.
+const PathRestartHint = "rebuild and redeploy the image"
+
+// PathBranchChoiceNotice instructs operators to choose the branch their application is tested on.
+const PathBranchChoiceNotice = "choose the branch your application is tested on"
+
+var (
+	safeImageRefRe     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$`)
+	evidenceFromRe     = regexp.MustCompile(`(?i)^FROM\s+(?:--[a-z0-9-]+=\S+\s+)*(\S+)`)
+	evidenceComposeRe  = regexp.MustCompile(`^-?\s*image\s*:\s*["']?([^\s"'#]+)["']?`)
+	tagVersionPrefixRe = regexp.MustCompile(`^(\d+(?:\.\d+)*(?:(?:RC|alpha|beta|dev)\d*)?)(.*)$`)
+	branchHintRe       = regexp.MustCompile(`(\d+\.\d+)`)
+)
 
 // ErrUnsafePackageToken is returned when a package name or version fails strict regex validation.
 var ErrUnsafePackageToken = errors.New("package token failed strict safety validation")
@@ -78,6 +96,10 @@ func BuildAll(findings []match.Finding, adv advisory.Advisory, opts Options) []R
 
 // Build produces a concrete Recommendation for a single Finding against an Advisory.
 func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation {
+	if f.Install.Source == inventory.SourcePath {
+		return buildPathRecommendation(f, adv, opts)
+	}
+
 	refs := append([]advisory.Reference(nil), adv.References...)
 
 	if f.Verdict == match.VerdictPatched {
@@ -101,19 +123,6 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 		steps := []string{
 			"verify manually: inspect the PHP binary version, SAPI configuration, and vendor changelog.",
 		}
-		var cmds []Command
-		if f.Install.Source == inventory.SourcePath {
-			pinTarget := f.FixedIn
-			if pinTarget == "" {
-				_, pinTarget = deriveHighestFixedIn(adv)
-			}
-			if pinTarget != "" {
-				steps = append(steps, fmt.Sprintf("Floating constraint or tag %q cannot prove a patched version: pin to FixedIn version %s or scan the resolved image digest.", f.Install.UpstreamVersion, pinTarget))
-			} else {
-				steps = append(steps, fmt.Sprintf("Floating constraint or tag %q cannot prove a patched version: pin to the FixedIn version or scan the resolved image digest.", f.Install.UpstreamVersion))
-			}
-			cmds, _ = buildCommands(f.Install, pinTarget)
-		}
 		if f.Install.Source == inventory.SourceRemote {
 			steps = append(steps, "Extra hardening: set expose_php = Off in php.ini to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
 		}
@@ -124,7 +133,6 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 			Priority:     PriorityP3,
 			Title:        fmt.Sprintf("Verify PHP installation manually for %s", targetDisplayName(f.Install)),
 			Steps:        steps,
-			Commands:     cmds,
 			RestartHints: restartHintsForSAPI(f.Install.SAPI),
 			Notes:        MitigationWarning,
 			References:   refs,
@@ -279,8 +287,8 @@ func buildCommands(inst inventory.PHPInstall, targetVersion string) ([]Command, 
 		return cmds, ""
 	}
 
-	// 2. Check for container image source or container manifest in path mode.
-	if inst.Source == inventory.SourceImage || (inst.Source == inventory.SourcePath && inst.PackageManager == "container") {
+	// 2. Check for container image source.
+	if inst.Source == inventory.SourceImage {
 		if targetVersion != "" {
 			if err := ValidatePackageToken(strings.ToLower(targetVersion)); err != nil {
 				notes = append(notes, fmt.Sprintf("Rejected unsafe target version %q from command output.", targetVersion))
@@ -515,4 +523,269 @@ func FormatText(rec Recommendation) string {
 	}
 
 	return b.String()
+}
+
+func buildPathRecommendation(f match.Finding, adv advisory.Advisory, opts Options) Recommendation {
+	refs := append([]advisory.Reference(nil), adv.References...)
+	inst := f.Install
+	restartHints := []string{PathRestartHint}
+	priority := computePriority(f.Verdict, inst.SAPI)
+
+	var title string
+	switch f.Verdict {
+	case match.VerdictPatched:
+		title = fmt.Sprintf("No remediation required for %s (PATCHED)", targetDisplayName(inst))
+	case match.VerdictUnknown:
+		title = fmt.Sprintf("Verify PHP installation manually for %s", targetDisplayName(inst))
+	default:
+		title = fmt.Sprintf("[%s] Remediate %s (%s, SAPI: %s)", priority, targetDisplayName(inst), f.Verdict, inst.SAPI)
+	}
+
+	var steps []string
+	var cmds []Command
+
+	switch {
+	case inst.PackageManager == "container":
+		rawRef := extractContainerImageRef(inst)
+		normRef := inventory.NormalizeImageRef(rawRef)
+		safeRef := sanitizeImageRefForDisplay(normRef)
+		displayRepo, tag := splitContainerRepoTag(safeRef)
+		variantSuffix := extractTagVariantSuffix(tag, inst.SAPI)
+
+		switch f.Verdict {
+		case match.VerdictPatched:
+			steps = append(steps, fmt.Sprintf("Declared container image tag %s meets or exceeds the patched version threshold (%s).", safeRef, f.FixedIn))
+		case match.VerdictUnknown:
+			scanCmd := fmt.Sprintf("php2shell-check scan image %s", safeRef)
+			steps = append(steps, fmt.Sprintf("%s — resolve the floating tag and inspect the built image (verify manually).", scanCmd))
+			cmds = append(cmds, Command{
+				Label: "Scan resolved image",
+				Text:  scanCmd,
+			})
+			if f.FixedIn != "" {
+				fixedTag := formatContainerTag(displayRepo, f.FixedIn, variantSuffix)
+				steps = append(steps, fmt.Sprintf("Pin the image tag to %s and pin by digest (@sha256:...) after an image scan (scan the resolved image digest).", fixedTag))
+				cmds = append(cmds, Command{
+					Label: "Update container base image",
+					Text:  fmt.Sprintf("bump the base image tag to %s", fixedTag),
+				})
+			} else {
+				allTags := buildAllSupportedBranchTags(displayRepo, variantSuffix, adv)
+				steps = append(steps, fmt.Sprintf("Pin the image tag to a fixed release (%s — %s) and pin by digest after scanning the resolved image digest.", strings.Join(allTags, ", "), PathBranchChoiceNotice))
+				cmds = append(cmds, Command{
+					Label: "Update container base image",
+					Text:  fmt.Sprintf("bump the base image tag to one of: %s (%s)", strings.Join(allTags, ", "), PathBranchChoiceNotice),
+				})
+			}
+		default:
+			branch := parseInstallBranch(inst.UpstreamVersion)
+			fixedIn := f.FixedIn
+			if fixedIn == "" && branch != "" {
+				fixedIn = findFixedInForBranch(branch, adv)
+			}
+			if fixedIn != "" {
+				fixedTag := formatContainerTag(displayRepo, fixedIn, variantSuffix)
+				steps = append(steps, fmt.Sprintf("Upgrade the container image tag on branch %s from %s to %s.", branchOrUnknown(branch), safeRef, fixedTag))
+				cmds = append(cmds, Command{
+					Label: "Update container base image",
+					Text:  fmt.Sprintf("bump the base image tag to %s", fixedTag),
+				})
+			} else {
+				allTags := buildAllSupportedBranchTags(displayRepo, variantSuffix, adv)
+				steps = append(steps, fmt.Sprintf("Branch %s has no verified upstream fix; migrate to a supported branch tag (%s — %s).", branchOrUnknown(branch), strings.Join(allTags, ", "), PathBranchChoiceNotice))
+				cmds = append(cmds, Command{
+					Label: "Update container base image",
+					Text:  fmt.Sprintf("bump the base image tag to one of: %s (%s)", strings.Join(allTags, ", "), PathBranchChoiceNotice),
+				})
+			}
+		}
+
+	case inst.PackageManager == "composer" || strings.Contains(strings.ToLower(inst.BinaryPath), "composer.json"):
+		fixedIn := f.FixedIn
+		if fixedIn == "" {
+			if branch := extractBranchHint(inst.UpstreamVersion); branch != "" {
+				fixedIn = findFixedInForBranch(branch, adv)
+			}
+		}
+		if fixedIn != "" {
+			steps = append(steps, fmt.Sprintf("A composer.json constraint is not an installed version and composer platform settings don't change the runtime; pin the runtime PHP version (e.g. >= %s) and scan the built image (verify manually).", fixedIn))
+		} else {
+			allVers := listSupportedFixedVersions(adv)
+			steps = append(steps, fmt.Sprintf("A composer.json constraint is not an installed version and composer platform settings don't change the runtime; pin the runtime PHP version (%s — %s) and scan the built image (verify manually).", strings.Join(allVers, ", "), PathBranchChoiceNotice))
+		}
+
+	default:
+		branch := parseInstallBranch(inst.UpstreamVersion)
+		if branch == "" {
+			branch = extractBranchHint(inst.UpstreamVersion)
+		}
+		fixedIn := f.FixedIn
+		if fixedIn == "" && branch != "" {
+			fixedIn = findFixedInForBranch(branch, adv)
+		}
+		switch {
+		case f.Verdict == match.VerdictPatched:
+			steps = append(steps, fmt.Sprintf("Declared version %s in %s meets or exceeds the patched version threshold (%s).", inst.UpstreamVersion, targetDisplayName(inst), fixedIn))
+		case fixedIn != "":
+			steps = append(steps, fmt.Sprintf("Update %s to the fixed version for branch %s (%s), and verify manually by scanning the built image or deployed runtime.", targetDisplayName(inst), branchOrUnknown(branch), fixedIn))
+			cmds = append(cmds, Command{
+				Label: "Pin PHP version",
+				Text:  fmt.Sprintf("set PHP version to %s", fixedIn),
+			})
+		default:
+			allVers := listSupportedFixedVersions(adv)
+			steps = append(steps, fmt.Sprintf("Update %s to a supported fixed version (%s — %s), and verify manually by scanning the built image or deployed runtime.", targetDisplayName(inst), strings.Join(allVers, ", "), PathBranchChoiceNotice))
+		}
+	}
+
+	steps = append(steps, PathMitigationNotice)
+	if opts.IncludeHuntHints {
+		steps = append(steps, HuntHints()...)
+	}
+
+	return Recommendation{
+		Priority:     priority,
+		Title:        title,
+		Steps:        steps,
+		Commands:     cmds,
+		RestartHints: restartHints,
+		Notes:        PathMitigationNotice,
+		References:   refs,
+	}
+}
+
+func extractContainerImageRef(inst inventory.PHPInstall) string {
+	for _, ev := range inst.Evidence {
+		idx := strings.Index(ev, " -> ")
+		if idx < 0 {
+			continue
+		}
+		line := strings.TrimSpace(ev[idx+len(" -> "):])
+		if m := evidenceFromRe.FindStringSubmatch(line); len(m) == 2 {
+			return m[1]
+		}
+		if m := evidenceComposeRe.FindStringSubmatch(line); len(m) == 2 {
+			return m[1]
+		}
+	}
+	if strings.Contains(inst.UpstreamVersion, ":") || strings.Contains(inst.UpstreamVersion, "@") {
+		return inst.UpstreamVersion
+	}
+	if strings.Contains(inst.PackageName, ":") {
+		return inst.PackageName
+	}
+	repo := inst.PackageName
+	if repo == "" {
+		repo = "php"
+	}
+	suffix := sapiVariantSuffix(inst.SAPI)
+	if inst.UpstreamVersion != "" {
+		return fmt.Sprintf("%s:%s%s", repo, inst.UpstreamVersion, suffix)
+	}
+	return repo
+}
+
+func sanitizeImageRefForDisplay(ref string) string {
+	trimmed := strings.TrimSpace(ref)
+	if trimmed == "" || !safeImageRefRe.MatchString(trimmed) {
+		return "php"
+	}
+	return trimmed
+}
+
+func splitContainerRepoTag(imageRef string) (string, string) {
+	ref := imageRef
+	if atIdx := strings.IndexByte(ref, '@'); atIdx >= 0 {
+		ref = ref[:atIdx]
+	}
+	lastSlash := strings.LastIndexByte(ref, '/')
+	lastColon := strings.LastIndexByte(ref, ':')
+	if lastColon > lastSlash {
+		return ref[:lastColon], ref[lastColon+1:]
+	}
+	if ref == "" {
+		return "php", ""
+	}
+	return ref, ""
+}
+
+func extractTagVariantSuffix(tag string, sapi inventory.SAPI) string {
+	if m := tagVersionPrefixRe.FindStringSubmatch(tag); len(m) == 3 {
+		return m[2]
+	}
+	return sapiVariantSuffix(sapi)
+}
+
+func sapiVariantSuffix(sapi inventory.SAPI) string {
+	switch sapi {
+	case inventory.SAPIApache2Handler:
+		return "-apache"
+	case inventory.SAPIFPM:
+		return "-fpm"
+	case inventory.SAPICLI:
+		return "-cli"
+	default:
+		return ""
+	}
+}
+
+func formatContainerTag(repo, fixedIn, variantSuffix string) string {
+	if repo == "" {
+		repo = "php"
+	}
+	return fmt.Sprintf("%s:%s%s", repo, fixedIn, variantSuffix)
+}
+
+func listSupportedFixedVersions(adv advisory.Advisory) []string {
+	type parsedFix struct {
+		raw string
+		ver phpver.Version
+	}
+	var fixes []parsedFix
+	for _, b := range adv.Branches {
+		if b.FixedIn == "" {
+			continue
+		}
+		if b.UpstreamFixAvailable != nil && !*b.UpstreamFixAvailable {
+			continue
+		}
+		v, err := phpver.Parse(b.FixedIn)
+		if err != nil {
+			continue
+		}
+		fixes = append(fixes, parsedFix{raw: b.FixedIn, ver: v})
+	}
+	sort.Slice(fixes, func(i, j int) bool {
+		return phpver.Compare(fixes[i].ver, fixes[j].ver) < 0
+	})
+	out := make([]string, 0, len(fixes))
+	for _, f := range fixes {
+		out = append(out, f.raw)
+	}
+	return out
+}
+
+func buildAllSupportedBranchTags(repo, variantSuffix string, adv advisory.Advisory) []string {
+	vers := listSupportedFixedVersions(adv)
+	tags := make([]string, 0, len(vers))
+	for _, v := range vers {
+		tags = append(tags, formatContainerTag(repo, v, variantSuffix))
+	}
+	return tags
+}
+
+func findFixedInForBranch(branch string, adv advisory.Advisory) string {
+	for _, b := range adv.Branches {
+		if b.Branch == branch && b.FixedIn != "" && (b.UpstreamFixAvailable == nil || *b.UpstreamFixAvailable) {
+			return b.FixedIn
+		}
+	}
+	return ""
+}
+
+func extractBranchHint(raw string) string {
+	if m := branchHintRe.FindStringSubmatch(raw); len(m) == 2 {
+		return m[1]
+	}
+	return ""
 }

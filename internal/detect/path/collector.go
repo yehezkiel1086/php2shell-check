@@ -19,11 +19,19 @@ import (
 const maxManifestFileBytes = 4 << 20 // 4 MiB cap per manifest file
 
 var (
-	dockerfileFromRe = regexp.MustCompile(`(?i)^\s*FROM\s+(?:--[a-z0-9-]+=\S+\s+)*(\S+)`)
-	composeImageRe   = regexp.MustCompile(`^\s*-?\s*image\s*:\s*["']?([^\s"'#]+)["']?`)
-	exactSemverRe    = regexp.MustCompile(`^(\d+\.\d+\.\d+(?:(?:RC|alpha|beta|dev)\d*)?)(?:$|[-_][a-zA-Z])`)
-	frankenPHPVerRe  = regexp.MustCompile(`php(\d+\.\d+\.\d+(?:(?:RC|alpha|beta|dev)\d*)?)`)
+	dockerfileFromRe      = regexp.MustCompile(`(?i)^\s*FROM\s+(?:--[a-z0-9-]+=\S+\s+)*(\S+)`)
+	composeImageRe        = regexp.MustCompile(`^\s*-?\s*image\s*:\s*["']?([^\s"'#]+)["']?`)
+	composeBuildRe        = regexp.MustCompile(`^\s*build\s*:\s*(.*)$`)
+	composeBuildContextRe = regexp.MustCompile(`^\s*context\s*:\s*["']?([^\s"'#]+)["']?`)
+	composeBuildFileRe    = regexp.MustCompile(`^\s*dockerfile\s*:\s*["']?([^\s"'#]+)["']?`)
+	exactSemverRe         = regexp.MustCompile(`^(\d+\.\d+\.\d+(?:(?:RC|alpha|beta|dev)\d*)?)(?:$|[-_][a-zA-Z])`)
+	frankenPHPVerRe       = regexp.MustCompile(`php(\d+\.\d+\.\d+(?:(?:RC|alpha|beta|dev)\d*)?)`)
 )
+
+// NormalizeImageRef strips default Docker Hub library prefixes for display.
+func NormalizeImageRef(ref string) string {
+	return inventory.NormalizeImageRef(ref)
+}
 
 // Options configures filesystem path scanning.
 type Options struct {
@@ -75,6 +83,7 @@ func (c *Collector) Collect(ctx context.Context) ([]inventory.PHPInstall, error)
 	}
 
 	var installs []inventory.PHPInstall
+	var buildRefs []composeBuildRef
 	walkErr := filepath.WalkDir(realRoot, func(currentPath string, d fs.DirEntry, walkInErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -115,6 +124,12 @@ func (c *Collector) Collect(ctx context.Context) ([]inventory.PHPInstall, error)
 			return nil
 		}
 
+		if isComposeFileName(strings.ToLower(d.Name())) {
+			if data, readErr := readCappedFile(currentPath); readErr == nil {
+				buildRefs = append(buildRefs, parseComposeBuildRefs(data, relSlash)...)
+			}
+		}
+
 		found, fileErr := c.inspectFile(currentPath, relSlash)
 		if fileErr != nil {
 			return nil
@@ -126,6 +141,7 @@ func (c *Collector) Collect(ctx context.Context) ([]inventory.PHPInstall, error)
 		return nil, walkErr
 	}
 
+	installs = mergeComposeBuildRefs(installs, buildRefs)
 	return installs, nil
 }
 
@@ -283,6 +299,161 @@ func parseComposeBytes(data []byte, displayPath string) []inventory.PHPInstall {
 		}
 	}
 	return installs
+}
+
+type composeBuildRef struct {
+	composeFile        string
+	buildLineNum       int
+	buildLineText      string
+	dockerfileRelSlash string
+	serviceImageLocs   []string
+}
+
+func parseComposeBuildRefs(data []byte, composeRelSlash string) []composeBuildRef {
+	lines := strings.Split(string(data), "\n")
+	composeDir := filepath.Dir(composeRelSlash)
+	var refs []composeBuildRef
+
+	for idx := 0; idx < len(lines); idx++ {
+		rawLine := lines[idx]
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		m := composeBuildRe.FindStringSubmatch(rawLine)
+		if len(m) < 2 {
+			continue
+		}
+
+		buildLineNum := idx + 1
+		buildIndent := countLeadingSpaces(rawLine)
+		remainder := stripYAMLCommentAndQuotes(m[1])
+
+		contextDir := "."
+		dockerfileName := "Dockerfile"
+		buildLineText := trimmed
+
+		if remainder != "" {
+			contextDir = remainder
+		} else {
+			for j := idx + 1; j < len(lines); j++ {
+				subRaw := lines[j]
+				subTrim := strings.TrimSpace(subRaw)
+				if subTrim == "" || strings.HasPrefix(subTrim, "#") {
+					continue
+				}
+				if countLeadingSpaces(subRaw) <= buildIndent {
+					break
+				}
+				if cm := composeBuildContextRe.FindStringSubmatch(subRaw); len(cm) == 2 {
+					contextDir = cm[1]
+				}
+				if dm := composeBuildFileRe.FindStringSubmatch(subRaw); len(dm) == 2 {
+					dockerfileName = dm[1]
+				}
+			}
+			buildLineText = fmt.Sprintf("build: (context: %s, dockerfile: %s)", contextDir, dockerfileName)
+		}
+
+		// Also find any image: directive belonging to the same service block so we can deduplicate if needed.
+		var serviceImageLocs []string
+		for j := idx - 1; j >= 0; j-- {
+			subRaw := lines[j]
+			subTrim := strings.TrimSpace(subRaw)
+			if subTrim == "" || strings.HasPrefix(subTrim, "#") {
+				continue
+			}
+			if countLeadingSpaces(subRaw) < buildIndent {
+				break
+			}
+			if composeImageRe.MatchString(subRaw) {
+				serviceImageLocs = append(serviceImageLocs, fmt.Sprintf("%s:%d", composeRelSlash, j+1))
+			}
+		}
+		for j := idx + 1; j < len(lines); j++ {
+			subRaw := lines[j]
+			subTrim := strings.TrimSpace(subRaw)
+			if subTrim == "" || strings.HasPrefix(subTrim, "#") {
+				continue
+			}
+			if countLeadingSpaces(subRaw) < buildIndent {
+				break
+			}
+			if composeImageRe.MatchString(subRaw) {
+				serviceImageLocs = append(serviceImageLocs, fmt.Sprintf("%s:%d", composeRelSlash, j+1))
+			}
+		}
+
+		resolvedDockerfile := filepath.ToSlash(filepath.Clean(filepath.Join(composeDir, contextDir, dockerfileName)))
+		refs = append(refs, composeBuildRef{
+			composeFile:        composeRelSlash,
+			buildLineNum:       buildLineNum,
+			buildLineText:      buildLineText,
+			dockerfileRelSlash: resolvedDockerfile,
+			serviceImageLocs:   serviceImageLocs,
+		})
+	}
+	return refs
+}
+
+func mergeComposeBuildRefs(installs []inventory.PHPInstall, buildRefs []composeBuildRef) []inventory.PHPInstall {
+	if len(buildRefs) == 0 || len(installs) == 0 {
+		return installs
+	}
+
+	dropComposeImageLoc := make(map[string]bool)
+	for _, ref := range buildRefs {
+		prefix := ref.dockerfileRelSlash + ":"
+		matched := false
+		composeEv := fmt.Sprintf("%s:%d -> %s", ref.composeFile, ref.buildLineNum, ref.buildLineText)
+		for i := range installs {
+			if strings.HasPrefix(installs[i].BinaryPath, prefix) {
+				installs[i].AddEvidence(composeEv)
+				matched = true
+			}
+		}
+		if matched {
+			for _, loc := range ref.serviceImageLocs {
+				dropComposeImageLoc[loc] = true
+			}
+		}
+	}
+
+	if len(dropComposeImageLoc) == 0 {
+		return installs
+	}
+
+	filtered := make([]inventory.PHPInstall, 0, len(installs))
+	for _, inst := range installs {
+		if dropComposeImageLoc[inst.BinaryPath] {
+			continue
+		}
+		filtered = append(filtered, inst)
+	}
+	return filtered
+}
+
+func countLeadingSpaces(s string) int {
+	count := 0
+	for _, r := range s {
+		switch r {
+		case ' ':
+			count++
+		case '\t':
+			count += 2
+		default:
+			return count
+		}
+	}
+	return count
+}
+
+func stripYAMLCommentAndQuotes(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if idx := strings.IndexByte(trimmed, '#'); idx >= 0 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
+	}
+	return strings.Trim(trimmed, `"'`)
 }
 
 func buildContainerRefInstall(imageRef, displayPath string, lineNum int, lineText string) (inventory.PHPInstall, bool) {

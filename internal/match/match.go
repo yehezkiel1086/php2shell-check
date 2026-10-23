@@ -168,8 +168,9 @@ func evaluateUnparseableVersion(inst inventory.PHPInstall, adv advisory.Advisory
 		return fmt.Sprintf("unparseable or unexposed remote PHP version %q (%s)", inst.UpstreamVersion, BannerCaveat), "", ""
 	}
 	if inst.Source == inventory.SourcePath {
+		displayRef := inventory.NormalizeImageRef(inst.UpstreamVersion)
 		hintedBranch := ""
-		if m := floatingBranchRe.FindStringSubmatch(inst.UpstreamVersion); len(m) == 2 {
+		if m := floatingBranchRe.FindStringSubmatch(displayRef); len(m) == 2 {
 			hintedBranch = m[1]
 		}
 		fixedIn := ""
@@ -179,9 +180,9 @@ func evaluateUnparseableVersion(inst inventory.PHPInstall, adv advisory.Advisory
 			}
 		}
 		if fixedIn != "" {
-			return fmt.Sprintf("floating version constraint or tag %q cannot prove a patched version; pin to %s or scan the resolved image digest", inst.UpstreamVersion, fixedIn), fixedIn, hintedBranch
+			return fmt.Sprintf("floating version constraint or tag %q cannot prove a patched version; pin to %s or scan the resolved image digest", displayRef, fixedIn), fixedIn, hintedBranch
 		}
-		return fmt.Sprintf("floating version constraint or tag %q cannot prove a patched version; pin to FixedIn version or scan the resolved image digest", inst.UpstreamVersion), "", hintedBranch
+		return fmt.Sprintf("floating version constraint or tag %q cannot prove a patched version; pin to FixedIn version or scan the resolved image digest", displayRef), "", hintedBranch
 	}
 	return fmt.Sprintf("unparseable upstream PHP version %q", inst.UpstreamVersion), "", ""
 }

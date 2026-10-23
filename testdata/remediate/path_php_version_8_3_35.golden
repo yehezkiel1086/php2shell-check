@@ -1,0 +1,10 @@
+Priority: P2
+Title:    [P2] Remediate .php-version:1 (VULNERABLE, SAPI: cli)
+Steps:
+  1. Update .php-version:1 to the fixed version for branch 8.3 (8.3.36), and verify manually by scanning the built image or deployed runtime.
+  2. config mitigation cannot be assessed from build files, scan the built image
+Commands:
+  [Pin PHP version] set PHP version to 8.3.36
+Restart Hints:
+  - rebuild and redeploy the image
+Notes:    config mitigation cannot be assessed from build files, scan the built image
