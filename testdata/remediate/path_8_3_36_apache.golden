@@ -2,7 +2,5 @@ Priority: P3
 Title:    No remediation required for Dockerfile:1 (PATCHED)
 Steps:
   1. Declared container image tag php:8.3.36-apache meets or exceeds the patched version threshold (8.3.36).
-  2. config mitigation cannot be assessed from build files, scan the built image
 Restart Hints:
   - rebuild and redeploy the image
-Notes:    config mitigation cannot be assessed from build files, scan the built image

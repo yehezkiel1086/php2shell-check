@@ -50,6 +50,9 @@ func evaluateCVEMitigations(inst inventory.PHPInstall, applicable []advisory.Mit
 	for _, m := range applicable {
 		rawVal, exists := inst.IniSettings[m.IniKey]
 		if !exists {
+			if len(inst.ConfigFiles) > 0 && !isSettingFromCLIOnly(inst, m.IniKey) {
+				return MitigationNotApplied
+			}
 			hasUnknown = true
 			continue
 		}
@@ -119,7 +122,7 @@ func isCLISource(src string) bool {
 func normalizeIniBool(s string) string {
 	val := strings.ToLower(strings.Trim(strings.TrimSpace(s), `"'`))
 	switch val {
-	case "0", "off", "false", "no", "none":
+	case "0", "off", "false", "no", "none", "":
 		return "0"
 	case "1", "on", "true", "yes":
 		return "1"

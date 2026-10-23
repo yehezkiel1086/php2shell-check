@@ -454,7 +454,7 @@ func TestPathModeGoldenAndInvariants(t *testing.T) {
 					t.Errorf("path finding remediation must never contain config diff (%q):\n%s", forbidden, text)
 				}
 			}
-			if !strings.Contains(text, remediate.PathMitigationNotice) {
+			if finding.Verdict != match.VerdictPatched && !strings.Contains(text, remediate.PathMitigationNotice) {
 				t.Errorf("path finding remediation missing %q:\n%s", remediate.PathMitigationNotice, text)
 			}
 			if !strings.Contains(text, remediate.PathRestartHint) {

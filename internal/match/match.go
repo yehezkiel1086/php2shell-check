@@ -25,6 +25,7 @@ const (
 	VerdictLikelyVulnerable Verdict = "LIKELY_VULNERABLE"
 	VerdictUnknown          Verdict = "UNKNOWN"
 	VerdictPatched          Verdict = "PATCHED"
+	VerdictNone             Verdict = "NONE"
 )
 
 // NoVerifiedUpstreamFixReason is the required reason when a branch has no verified upstream fix.
@@ -88,10 +89,10 @@ func CompareVerdictSeverity(a, b Verdict) int {
 
 // HighestVerdict returns the most severe verdict across findings
 // using the order VULNERABLE > LIKELY_VULNERABLE > UNKNOWN > PATCHED.
-// If findings is empty, it returns VerdictPatched.
+// If findings is empty, it returns VerdictNone.
 func HighestVerdict(findings []Finding) Verdict {
 	if len(findings) == 0 {
-		return VerdictPatched
+		return VerdictNone
 	}
 	best := VerdictPatched
 	for _, f := range findings {

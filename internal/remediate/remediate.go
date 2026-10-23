@@ -638,7 +638,11 @@ func buildPathRecommendation(f match.Finding, adv advisory.Advisory, opts Option
 		}
 	}
 
-	steps = append(steps, PathMitigationNotice)
+	notes := ""
+	if f.Verdict != match.VerdictPatched {
+		steps = append(steps, PathMitigationNotice)
+		notes = PathMitigationNotice
+	}
 	if opts.IncludeHuntHints {
 		steps = append(steps, HuntHints()...)
 	}
@@ -649,7 +653,7 @@ func buildPathRecommendation(f match.Finding, adv advisory.Advisory, opts Option
 		Steps:        steps,
 		Commands:     cmds,
 		RestartHints: restartHints,
-		Notes:        PathMitigationNotice,
+		Notes:        notes,
 		References:   refs,
 	}
 }
