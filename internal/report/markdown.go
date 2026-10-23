@@ -141,7 +141,15 @@ func RenderMarkdown(w io.Writer, rep Report, _ Options) error {
 			for _, step := range rec.Steps {
 				if strings.Contains(step, "\n") {
 					lines := strings.SplitN(step, "\n", 2)
-					_, _ = fmt.Fprintf(&b, "- %s\n\n```diff\n%s\n```\n\n", lines[0], lines[1])
+					codeLang := ""
+					if strings.Contains(lines[1], "--- a/") {
+						codeLang = "diff"
+					}
+					if codeLang != "" {
+						_, _ = fmt.Fprintf(&b, "- %s\n\n```%s\n%s\n```\n\n", lines[0], codeLang, lines[1])
+					} else {
+						_, _ = fmt.Fprintf(&b, "- %s\n\n```\n%s\n```\n\n", lines[0], lines[1])
+					}
 				} else {
 					_, _ = fmt.Fprintf(&b, "- %s\n", step)
 				}

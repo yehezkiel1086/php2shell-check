@@ -3,6 +3,7 @@ package remediate
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -104,9 +105,9 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 	refs := append([]advisory.Reference(nil), adv.References...)
 
 	if f.Verdict == match.VerdictPatched {
-		steps := []string{"Installation meets or exceeds the patched version threshold."}
+		steps := []string{"No remediation required: installation meets or exceeds the patched version threshold."}
 		if f.Install.Source == inventory.SourceRemote {
-			steps = append(steps, "Extra hardening: set expose_php = Off in php.ini to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
+			steps = append(steps, "Extra hardening: set expose_php = Off to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
 		}
 		rec := Recommendation{
 			Priority:   PriorityP3,
@@ -125,16 +126,18 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 			"verify manually: inspect the PHP binary version, SAPI configuration, and vendor changelog.",
 		}
 		if f.Install.Source == inventory.SourceRemote {
-			steps = append(steps, "Extra hardening: set expose_php = Off in php.ini to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
-		}
-		if diffStep := buildMitigationDiffStep(f.Install, "", adv); diffStep != "" {
-			steps = append(steps, diffStep)
+			steps = append(steps, "Extra hardening: set expose_php = Off to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
+		} else {
+			branch := parseInstallBranch(f.Install.UpstreamVersion)
+			if mitStep := buildMitigationStep(f, branch, adv); mitStep != "" {
+				steps = append(steps, mitStep)
+			}
 		}
 		rec := Recommendation{
 			Priority:     PriorityP3,
 			Title:        fmt.Sprintf("Verify PHP installation manually for %s", targetDisplayName(f.Install)),
 			Steps:        steps,
-			RestartHints: restartHintsForSAPI(f.Install.SAPI),
+			RestartHints: restartHints(f),
 			Notes:        MitigationWarning,
 			References:   refs,
 		}
@@ -148,12 +151,12 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 	branch := parseInstallBranch(f.Install.UpstreamVersion)
 	upgradeStep, targetVer := buildUpgradeStep(f, branch, adv)
 
-	commands, validationNotes := buildCommands(f.Install, targetVer)
-	mitigationStep := buildMitigationDiffStep(f.Install, branch, adv)
+	commands, validationNotes := buildCommands(f, targetVer, adv)
+	mitigationStep := buildMitigationStep(f, branch, adv)
 
 	steps := []string{upgradeStep}
 	if f.Install.Source == inventory.SourceRemote {
-		steps = append(steps, "Extra hardening: set expose_php = Off in php.ini to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
+		steps = append(steps, "Extra hardening: set expose_php = Off to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).")
 	}
 	if mitigationStep != "" {
 		steps = append(steps, mitigationStep)
@@ -172,7 +175,7 @@ func Build(f match.Finding, adv advisory.Advisory, opts Options) Recommendation 
 		Title:        fmt.Sprintf("[%s] Remediate %s (%s, SAPI: %s)", priority, targetDisplayName(f.Install), f.Verdict, f.Install.SAPI),
 		Steps:        steps,
 		Commands:     commands,
-		RestartHints: restartHintsForSAPI(f.Install.SAPI),
+		RestartHints: restartHints(f),
 		Notes:        notes,
 		References:   refs,
 	}
@@ -224,29 +227,222 @@ func parseInstallBranch(upstreamVersion string) string {
 	return v.Branch
 }
 
-func buildUpgradeStep(f match.Finding, branch string, adv advisory.Advisory) (string, string) {
-	if f.FixedIn != "" {
-		return fmt.Sprintf("Upgrade PHP on branch %s to >= %s.", branchOrUnknown(branch), f.FixedIn), f.FixedIn
+func isEOLOrNoFix(branch string, adv advisory.Advisory) bool {
+	if branch == "" {
+		return false
+	}
+	for _, b := range adv.Branches {
+		if b.Branch == branch {
+			return b.EOL || (b.UpstreamFixAvailable != nil && !*b.UpstreamFixAvailable) || b.FixedIn == ""
+		}
+	}
+	v, err := phpver.Parse(branch + ".0")
+	if err == nil {
+		if minV, errMin := phpver.Parse(adv.AffectedMin); errMin == nil && phpver.Compare(v, minV) >= 0 {
+			if maxV, errMax := phpver.Parse(adv.AffectedMaxInclusive); errMax == nil && phpver.Compare(v, maxV) <= 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isDistroManaged(inst inventory.PHPInstall) bool {
+	if isCPanelOrCloudLinux(inst) {
+		return false
+	}
+	pm := strings.ToLower(strings.TrimSpace(inst.PackageManager))
+	if pm == "deb" || pm == "apk" || pm == "rpm" || pm == "dpkg" || pm == "apt" || pm == "dnf" || pm == "yum" {
+		return true
+	}
+	if pm == "container" || pm == "composer" || pm == "path" || pm == "sbom" {
+		return false
+	}
+	if inst.PackageName != "" || inst.PackageVersion != "" {
+		return true
+	}
+	return false
+}
+
+func isSourceBuild(inst inventory.PHPInstall) bool {
+	if isCPanelOrCloudLinux(inst) {
+		return false
+	}
+	return !isDistroManaged(inst)
+}
+
+func formatDistroName(id string) string {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case "debian":
+		return "Debian"
+	case "ubuntu":
+		return "Ubuntu"
+	case "alpine":
+		return "Alpine"
+	case "rhel":
+		return "RHEL"
+	case "rocky":
+		return "Rocky"
+	case "centos":
+		return "CentOS"
+	case "almalinux":
+		return "AlmaLinux"
+	case "fedora":
+		return "Fedora"
+	case "kali":
+		return "Kali"
+	case "":
+		return "distro"
+	default:
+		lower := strings.ToLower(strings.TrimSpace(id))
+		return strings.ToUpper(lower[:1]) + lower[1:]
+	}
+}
+
+func detectSourceBuildPrefix(inst inventory.PHPInstall) (string, string) {
+	p := inst.BinaryPath
+	if p == "" {
+		p = inst.ModulePath
+	}
+	if p == "" && len(inst.ConfigFiles) > 0 {
+		p = inst.ConfigFiles[0]
+	}
+	p = filepath.ToSlash(p)
+
+	var prefix string
+	if idx := strings.Index(p, "/bin/"); idx >= 0 {
+		prefix = p[:idx]
+	} else if idx := strings.Index(p, "/sbin/"); idx >= 0 {
+		prefix = p[:idx]
+	} else if idx := strings.Index(p, "/etc/"); idx >= 0 {
+		prefix = p[:idx]
+	} else if idx := strings.Index(p, "/lib/"); idx >= 0 {
+		prefix = p[:idx]
+	} else {
+		prefix = filepath.ToSlash(filepath.Dir(p))
 	}
 
-	for _, b := range adv.Branches {
-		if b.Branch == branch && b.FixedIn != "" && (b.UpstreamFixAvailable == nil || *b.UpstreamFixAvailable) {
-			return fmt.Sprintf("Upgrade PHP on branch %s to >= %s.", branch, b.FixedIn), b.FixedIn
+	if prefix == "" || prefix == "." || prefix == "/usr" {
+		prefix = "/usr/local"
+	}
+
+	parent := filepath.ToSlash(filepath.Dir(prefix))
+	if prefix == "/usr/local" || parent == "/" || parent == "." {
+		parent = prefix
+	}
+	return prefix, parent
+}
+
+func deriveRelatedPhpPackages(inst inventory.PHPInstall, branch string) []string {
+	pkg := inst.PackageName
+	pm := resolvePackageManagerFamily(inst.PackageManager, inst.Distro.ID)
+
+	var prefix string
+	if pkg != "" {
+		if idx := strings.LastIndexByte(pkg, '-'); idx >= 0 {
+			prefix = pkg[:idx]
+		} else if strings.HasPrefix(pkg, "php") {
+			prefix = pkg
+		}
+	}
+	if prefix == "" {
+		switch pm {
+		case "apk":
+			if branch != "" {
+				prefix = "php" + strings.ReplaceAll(branch, ".", "")
+			} else {
+				prefix = "php"
+			}
+		case "deb":
+			if branch != "" {
+				prefix = "php" + branch
+			} else {
+				prefix = "php"
+			}
+		default:
+			prefix = "php"
 		}
 	}
 
-	// EOL or no-fix branch: derive the migration target from the highest FixedIn in the advisory data.
-	highestBranch, highestFixedIn := deriveHighestFixedIn(adv)
-	if highestFixedIn != "" {
-		return fmt.Sprintf(
-			"Branch %s has no verified upstream fix (EOL/unfixed); migrate to a supported PHP branch such as %s (>= %s).",
-			branchOrUnknown(branch),
-			highestBranch,
-			highestFixedIn,
-		), highestFixedIn
+	var candidates []string
+	switch pm {
+	case "apk":
+		candidates = []string{prefix + "-cli", prefix + "-fpm", prefix + "-common"}
+	case "rpm":
+		candidates = []string{"php-cli", "php-fpm", "php-common"}
+	default:
+		candidates = []string{prefix + "-cli", prefix + "-fpm", prefix + "-common"}
 	}
 
-	return fmt.Sprintf("Branch %s has no verified upstream fix; migrate to a supported PHP branch.", branchOrUnknown(branch)), ""
+	var valid []string
+	for _, c := range candidates {
+		if ValidatePackageToken(c) == nil {
+			valid = append(valid, c)
+		}
+	}
+	if len(valid) == 0 {
+		return []string{"php"}
+	}
+	return valid
+}
+
+func buildUpgradeStep(f match.Finding, branch string, adv advisory.Advisory) (string, string) {
+	inst := f.Install
+
+	// 1. EOL or no-fix branch
+	if isEOLOrNoFix(branch, adv) {
+		highestBranch, highestFixedIn := deriveHighestFixedIn(adv)
+		if highestFixedIn != "" {
+			return fmt.Sprintf(
+				"Branch %s has no verified upstream fix (EOL/unfixed); major-version migration, needs application testing (target: %s (>= %s)). Check for vendor or LTS backports, and keep configuration mitigations as a stop-gap.",
+				branchOrUnknown(branch),
+				highestBranch,
+				highestFixedIn,
+			), ""
+		}
+		return fmt.Sprintf("Branch %s has no verified upstream fix; major-version migration, needs application testing.", branchOrUnknown(branch)), ""
+	}
+
+	// 2. Distro-managed install
+	if isDistroManaged(inst) {
+		if df, ok := match.FindVerifiedDistroFix(inst, adv.DistroFixes); ok {
+			pkg := inst.PackageName
+			if pkg == "" {
+				pkg = "php"
+			}
+			return fmt.Sprintf("Upgrade %s to >= %s via distro package manager.", pkg, df.FixedVersion), df.FixedVersion
+		}
+		distroName := formatDistroName(inst.Distro.ID)
+		step := fmt.Sprintf("No verified %s fix is recorded yet; check vendor security trackers for backported package updates.", distroName)
+		if inst.Source == inventory.SourceImage {
+			step += " Rebuild the layer without cache once updated packages are available."
+		}
+		return step, ""
+	}
+
+	// 3. Fixable branch
+	fixedIn := f.FixedIn
+	if fixedIn == "" {
+		for _, b := range adv.Branches {
+			if b.Branch == branch && b.FixedIn != "" && (b.UpstreamFixAvailable == nil || *b.UpstreamFixAvailable) {
+				fixedIn = b.FixedIn
+				break
+			}
+		}
+	}
+
+	// Local source build:
+	if inst.Source == inventory.SourceLocal && isSourceBuild(inst) && fixedIn != "" {
+		_, parentPrefix := detectSourceBuildPrefix(inst)
+		targetEx := fmt.Sprintf("%s/%s", parentPrefix, fixedIn)
+		return fmt.Sprintf("Rebuild PHP >= %s with the same configure options into a new prefix (for example %s), switch symlinks or service paths, then restart php-fpm.", fixedIn, targetEx), fixedIn
+	}
+
+	if fixedIn != "" {
+		return fmt.Sprintf("Upgrade PHP on branch %s to >= %s.", branchOrUnknown(branch), fixedIn), fixedIn
+	}
+
+	return fmt.Sprintf("Upgrade PHP on branch %s to a patched release.", branchOrUnknown(branch)), ""
 }
 
 func deriveHighestFixedIn(adv advisory.Advisory) (string, string) {
@@ -275,11 +471,18 @@ func deriveHighestFixedIn(adv advisory.Advisory) (string, string) {
 	return bestBranch, bestRaw
 }
 
-func buildCommands(inst inventory.PHPInstall, targetVersion string) ([]Command, string) {
+func buildCommands(f match.Finding, targetVersion string, adv advisory.Advisory) ([]Command, string) {
+	inst := f.Install
+	branch := parseInstallBranch(inst.UpstreamVersion)
 	var cmds []Command
 	var notes []string
 
-	// 1. Check for cPanel or CloudLinux paths/packages first.
+	// 1. Remote findings have NO commands.
+	if inst.Source == inventory.SourceRemote {
+		return nil, ""
+	}
+
+	// 2. Check for cPanel or CloudLinux paths/packages first.
 	if isCPanelOrCloudLinux(inst) {
 		cmds = append(cmds, Command{
 			Label: "Vendor update tooling (cPanel / CloudLinux)",
@@ -288,18 +491,99 @@ func buildCommands(inst inventory.PHPInstall, targetVersion string) ([]Command, 
 		return cmds, ""
 	}
 
-	// 2. Check for container image source.
+	// 3. EOL or no-fix branch (no bump-the-tag command!).
+	if isEOLOrNoFix(branch, adv) {
+		highestBranch, highestFixedIn := deriveHighestFixedIn(adv)
+		cmds = append(cmds, Command{
+			Label: "Migrate PHP runtime",
+			Text:  fmt.Sprintf("major-version migration, needs application testing (target: PHP %s >= %s)", highestBranch, highestFixedIn),
+		})
+		return cmds, ""
+	}
+
+	// 4. Distro-managed install
+	if isDistroManaged(inst) {
+		if inst.PackageName != "" {
+			if err := ValidatePackageToken(inst.PackageName); err != nil {
+				notes = append(notes, fmt.Sprintf("Rejected unsafe package name %q from command generation.", inst.PackageName))
+				return nil, strings.Join(notes, " ")
+			}
+		}
+
+		pm := resolvePackageManagerFamily(inst.PackageManager, inst.Distro.ID)
+		if _, ok := match.FindVerifiedDistroFix(inst, adv.DistroFixes); ok {
+			pkg := inst.PackageName
+			switch pm {
+			case "deb":
+				if pkg == "" {
+					pkg = "php"
+				}
+				cmds = append(cmds, Command{
+					Label: "Upgrade Debian/Ubuntu package",
+					Text:  fmt.Sprintf("apt-get install --only-upgrade %s", pkg),
+				})
+			case "rpm":
+				if pkg == "" {
+					pkg = "php"
+				}
+				cmds = append(cmds, Command{
+					Label: "Upgrade RPM package",
+					Text:  fmt.Sprintf("dnf upgrade %s", pkg),
+				})
+			case "apk":
+				if pkg == "" {
+					pkg = "php"
+				}
+				cmds = append(cmds, Command{
+					Label: "Upgrade Alpine package",
+					Text:  fmt.Sprintf("apk upgrade %s", pkg),
+				})
+			}
+		} else {
+			pkgs := deriveRelatedPhpPackages(inst, branch)
+			switch pm {
+			case "deb":
+				cmds = append(cmds, Command{
+					Label: "Upgrade Debian/Ubuntu PHP packages",
+					Text:  fmt.Sprintf("apt-get update && apt-get install --only-upgrade %s", strings.Join(pkgs, " ")),
+				})
+			case "rpm":
+				cmds = append(cmds, Command{
+					Label: "Upgrade RPM PHP packages",
+					Text:  fmt.Sprintf("dnf check-update; dnf upgrade %s", strings.Join(pkgs, " ")),
+				})
+			case "apk":
+				cmds = append(cmds, Command{
+					Label: "Upgrade Alpine PHP packages",
+					Text:  fmt.Sprintf("apk update && apk upgrade %s", strings.Join(pkgs, " ")),
+				})
+			}
+		}
+
+		if inst.Source == inventory.SourceImage {
+			cmds = append(cmds, Command{
+				Label: "Rebuild container layer",
+				Text:  "rebuild the layer without cache",
+			})
+		}
+		return cmds, strings.Join(notes, " ")
+	}
+
+	// 5. Container image source build (e.g. official PHP image):
 	if inst.Source == inventory.SourceImage {
 		if targetVersion != "" {
-			if err := ValidatePackageToken(strings.ToLower(targetVersion)); err != nil {
-				notes = append(notes, fmt.Sprintf("Rejected unsafe target version %q from command output.", targetVersion))
-			} else {
-				cmds = append(cmds, Command{
-					Label: "Update container base image",
-					Text:  fmt.Sprintf("bump the base image tag to %s", strings.ToLower(targetVersion)),
-				})
-				return cmds, strings.Join(notes, " ")
+			safeRef := sanitizeImageRefForDisplay(inst.ImageRef)
+			if safeRef == "" || safeRef == "php" {
+				safeRef = extractContainerImageRef(inst)
 			}
+			_, tag := splitContainerRepoTag(safeRef)
+			variantSuffix := extractTagVariantSuffix(tag, inst.SAPI)
+			fixedTag := formatContainerTag("php", targetVersion, variantSuffix)
+			cmds = append(cmds, Command{
+				Label: "Update container base image",
+				Text:  fmt.Sprintf("bump the base image tag to %s", fixedTag),
+			})
+			return cmds, strings.Join(notes, " ")
 		}
 		cmds = append(cmds, Command{
 			Label: "Update container base image",
@@ -308,76 +592,22 @@ func buildCommands(inst inventory.PHPInstall, targetVersion string) ([]Command, 
 		return cmds, strings.Join(notes, " ")
 	}
 
-	// 3. Source/custom build under /usr/local with no OS package manager ownership.
-	if inst.PackageManager == "" && inst.PackageName == "" && strings.HasPrefix(inst.BinaryPath, "/usr/local/") {
+	// 6. Local / standalone source build (fixable branch):
+	if isSourceBuild(inst) {
+		prefix, prefixParent := detectSourceBuildPrefix(inst)
 		if targetVersion != "" && ValidatePackageToken(strings.ToLower(targetVersion)) == nil {
+			examplePrefix := fmt.Sprintf("%s/%s", prefixParent, strings.ToLower(targetVersion))
 			cmds = append(cmds, Command{
-				Label: "Upgrade source/custom PHP build in /usr/local",
-				Text:  fmt.Sprintf("rebuild and install PHP >= %s into /usr/local from official source", strings.ToLower(targetVersion)),
+				Label: fmt.Sprintf("Upgrade source/custom PHP build in %s", prefix),
+				Text:  fmt.Sprintf("rebuild PHP >= %s with the same configure options into a new prefix (for example %s), switch symlinks or service paths, then restart php-fpm", strings.ToLower(targetVersion), examplePrefix),
 			})
 		} else {
 			cmds = append(cmds, Command{
-				Label: "Upgrade source/custom PHP build in /usr/local",
-				Text:  "rebuild and install a patched PHP release into /usr/local from official source",
+				Label: fmt.Sprintf("Upgrade source/custom PHP build in %s", prefix),
+				Text:  "rebuild PHP with the same configure options into a new prefix, switch symlinks or service paths, then restart php-fpm",
 			})
 		}
 		return cmds, strings.Join(notes, " ")
-	}
-
-	// 4. Validate package name if present before interpolating into any package manager command.
-	pkgName := inst.PackageName
-	if pkgName != "" {
-		if err := ValidatePackageToken(pkgName); err != nil {
-			notes = append(notes, fmt.Sprintf("Rejected unsafe package name %q from command generation.", pkgName))
-			return nil, strings.Join(notes, " ")
-		}
-	}
-
-	if inst.PackageVersion != "" {
-		if err := ValidatePackageToken(strings.ToLower(inst.PackageVersion)); err != nil {
-			notes = append(notes, fmt.Sprintf("Rejected unsafe package version %q from command generation.", inst.PackageVersion))
-			return nil, strings.Join(notes, " ")
-		}
-	}
-
-	pm := resolvePackageManagerFamily(inst.PackageManager, inst.Distro.ID)
-	switch pm {
-	case "deb":
-		if pkgName != "" {
-			cmds = append(cmds, Command{
-				Label: "Upgrade Debian/Ubuntu package",
-				Text:  fmt.Sprintf("apt-get install --only-upgrade %s", pkgName),
-			})
-		} else {
-			cmds = append(cmds, Command{
-				Label: "Upgrade Debian/Ubuntu PHP packages",
-				Text:  "apt-get install --only-upgrade php",
-			})
-		}
-	case "rpm":
-		if pkgName != "" {
-			cmds = append(cmds, Command{
-				Label: "Upgrade RPM package",
-				Text:  fmt.Sprintf("dnf upgrade %s", pkgName),
-			})
-		} else {
-			cmds = append(cmds, Command{
-				Label: "Upgrade RPM PHP packages",
-				Text:  "dnf upgrade php",
-			})
-		}
-	case "apk":
-		if pkgName != "" {
-			cmds = append(cmds, Command{
-				Label: "Upgrade Alpine package",
-				Text:  fmt.Sprintf("apk upgrade %s", pkgName),
-			})
-		} else {
-			cmds = append(cmds, Command{
-				Label: "Upgrade Alpine PHP packages",
-				Text:  "apk upgrade php",
-			})
-		}
 	}
 
 	return cmds, strings.Join(notes, " ")
@@ -419,43 +649,248 @@ func resolvePackageManagerFamily(pkgManager, distroID string) string {
 	}
 }
 
-func buildMitigationDiffStep(inst inventory.PHPInstall, branch string, adv advisory.Advisory) string {
-	var applicable []advisory.Mitigation
-	for _, m := range adv.Mitigations {
-		if m.AppliesToBranch == "" || m.AppliesToBranch == "*" || branch == "" || m.AppliesToBranch == branch {
-			applicable = append(applicable, m)
+var sourceFileLineRe = regexp.MustCompile(`ini:session\.upload_progress\.enabled=[^\s(]+\s+\(source:\s*([^)]+)\)`)
+
+func findMitigationSourceFileLine(f match.Finding) string {
+	for _, ev := range f.ConfigEvidence {
+		if m := sourceFileLineRe.FindStringSubmatch(ev); len(m) == 2 {
+			return m[1]
 		}
 	}
-	if len(applicable) == 0 {
+	for _, ev := range f.Install.Evidence {
+		if m := sourceFileLineRe.FindStringSubmatch(ev); len(m) == 2 {
+			return m[1]
+		}
+	}
+	if len(f.Install.ConfigFiles) > 0 {
+		return f.Install.ConfigFiles[0]
+	}
+	return ""
+}
+
+func findMitigationUnknownReason(f match.Finding) string {
+	inst := f.Install
+	if len(inst.ConfigFiles) == 0 && len(inst.IniSettings) == 0 {
+		return "config path not found"
+	}
+	if inst.SAPI != inventory.SAPICLI && isSettingFromCLIOnly(inst) {
+		return "CLI configuration only, web SAPI config not found"
+	}
+	return "config path not found"
+}
+
+func isSettingFromCLIOnly(inst inventory.PHPInstall) bool {
+	prefix := "ini:session.upload_progress.enabled="
+	var sources []string
+	for _, ev := range inst.Evidence {
+		if !strings.HasPrefix(ev, prefix) {
+			continue
+		}
+		idx := strings.Index(ev, "(source: ")
+		if idx < 0 {
+			continue
+		}
+		src := strings.TrimSuffix(ev[idx+len("(source: "):], ")")
+		sources = append(sources, strings.ToLower(strings.ReplaceAll(src, `\`, "/")))
+	}
+	if len(sources) > 0 {
+		for _, src := range sources {
+			if !isCLISource(src) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(inst.ConfigFiles) > 0 {
+		for _, cf := range inst.ConfigFiles {
+			norm := strings.ToLower(strings.ReplaceAll(cf, `\`, "/"))
+			if !isCLISource(norm) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func isCLISource(src string) bool {
+	return src == "php -i" ||
+		strings.Contains(src, "/cli/") ||
+		strings.HasSuffix(src, "/cli/php.ini")
+}
+
+func detectDropInIniPath(inst inventory.PHPInstall, branch string) string {
+	for _, cf := range inst.ConfigFiles {
+		norm := filepath.ToSlash(cf)
+		if idx := strings.Index(norm, "/conf.d/"); idx >= 0 {
+			return norm[:idx+len("/conf.d")] + "/99-mitigation.ini"
+		}
+	}
+
+	if (inst.Distro.ID == "debian" || inst.Distro.ID == "ubuntu") && !strings.HasPrefix(inst.BinaryPath, "/opt/") {
+		sapiStr := string(inst.SAPI)
+		if sapiStr == "" || sapiStr == "unknown" {
+			sapiStr = "cli"
+		}
+		b := branch
+		if b == "" {
+			b = parseInstallBranch(inst.UpstreamVersion)
+		}
+		if b != "" {
+			return fmt.Sprintf("/etc/php/%s/%s/conf.d/99-mitigation.ini", b, sapiStr)
+		}
+	}
+
+	if strings.HasPrefix(inst.BinaryPath, "/usr/local/") || strings.HasPrefix(inst.ModulePath, "/usr/local/") || inst.Source == inventory.SourceImage {
+		return "/usr/local/etc/php/conf.d/99-mitigation.ini"
+	}
+
+	if isSourceBuild(inst) {
+		prefix, _ := detectSourceBuildPrefix(inst)
+		if prefix != "" && prefix != "/" {
+			return fmt.Sprintf("%s/etc/conf.d/99-mitigation.ini", prefix)
+		}
+	}
+
+	return "/etc/php/conf.d/99-mitigation.ini"
+}
+
+func detectFpmPoolPath(inst inventory.PHPInstall, branch string) string {
+	for _, cf := range inst.ConfigFiles {
+		norm := filepath.ToSlash(cf)
+		if strings.HasSuffix(norm, "/www.conf") || strings.Contains(norm, "/pool.d/") || strings.Contains(norm, "/php-fpm.d/") {
+			return norm
+		}
+	}
+	poolRe := regexp.MustCompile(`source:\s*([^\s)]+www\.conf[^\s)]*)`)
+	for _, ev := range inst.Evidence {
+		if m := poolRe.FindStringSubmatch(ev); len(m) == 2 {
+			p := m[1]
+			if idx := strings.Index(p, ":"); idx >= 0 {
+				p = p[:idx]
+			}
+			return filepath.ToSlash(p)
+		}
+	}
+	if (inst.Distro.ID == "debian" || inst.Distro.ID == "ubuntu") && !strings.HasPrefix(inst.BinaryPath, "/opt/") {
+		b := branch
+		if b == "" {
+			b = parseInstallBranch(inst.UpstreamVersion)
+		}
+		if b != "" {
+			return fmt.Sprintf("/etc/php/%s/fpm/pool.d/www.conf", b)
+		}
+		return "/etc/php/fpm/pool.d/www.conf"
+	}
+	if isSourceBuild(inst) {
+		prefix, _ := detectSourceBuildPrefix(inst)
+		if prefix != "" && prefix != "/usr/local" && prefix != "/" {
+			return fmt.Sprintf("%s/etc/php-fpm.d/www.conf", prefix)
+		}
+	}
+	return "/usr/local/etc/php-fpm.d/www.conf"
+}
+
+func buildMitigationStep(f match.Finding, branch string, adv advisory.Advisory) string {
+	if f.Verdict == match.VerdictPatched {
 		return ""
 	}
 
-	var b strings.Builder
-	b.WriteString("Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n")
-	b.WriteString("--- a/php.ini\n")
-	b.WriteString("+++ b/php.ini\n")
-	for _, m := range applicable {
-		fmt.Fprintf(&b, "-%s = 1\n", m.IniKey)
-		fmt.Fprintf(&b, "+%s = %s\n", m.IniKey, m.RecommendedValue)
+	inst := f.Install
+	if inst.Source == inventory.SourceRemote {
+		return "Temporary configuration mitigation (CVE-2026-109619): config mitigation cannot be assessed remotely, run scan local on the host."
 	}
 
-	if inst.SAPI == inventory.SAPIFPM {
-		b.WriteString("--- a/pool.d/www.conf\n")
-		b.WriteString("+++ b/pool.d/www.conf\n")
-		for _, m := range applicable {
-			fmt.Fprintf(&b, "+php_admin_value[%s] = %s\n", m.IniKey, m.RecommendedValue)
+	status, exists := f.Mitigation["CVE-2026-109619"]
+	if !exists {
+		status = match.MitigationNotApplied
+	}
+	switch status {
+	case match.MitigationApplied:
+		source := findMitigationSourceFileLine(f)
+		if source != "" {
+			return fmt.Sprintf("Temporary configuration mitigation (CVE-2026-109619): already applied via %s, still upgrade.", source)
 		}
-	}
+		return "Temporary configuration mitigation (CVE-2026-109619): already applied, still upgrade."
 
-	return strings.TrimSuffix(b.String(), "\n")
+	case match.MitigationNotApplied:
+		dropInPath := detectDropInIniPath(inst, branch)
+		var b strings.Builder
+		b.WriteString("Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):\n")
+		fmt.Fprintf(&b, "Create drop-in INI file %s:\n", dropInPath)
+		b.WriteString("  session.upload_progress.enabled = 0\n")
+		if branch == "8.5" {
+			b.WriteString("  fatal_error_backtraces = 0\n")
+		}
+		if inst.SAPI == inventory.SAPIFPM {
+			poolPath := detectFpmPoolPath(inst, branch)
+			fmt.Fprintf(&b, "Alternatively, in FPM pool config (%s):\n", poolPath)
+			b.WriteString("  php_admin_value[session.upload_progress.enabled] = 0\n")
+			if branch == "8.5" {
+				b.WriteString("  php_admin_value[fatal_error_backtraces] = 0\n")
+			}
+		} else if inst.SAPI == inventory.SAPIApache2Handler {
+			b.WriteString("Alternatively, in Apache configuration:\n")
+			b.WriteString("  php_admin_flag session.upload_progress.enabled off\n")
+			if branch == "8.5" {
+				b.WriteString("  php_admin_value fatal_error_backtraces 0\n")
+			}
+		}
+		return strings.TrimSuffix(b.String(), "\n")
+
+	case match.MitigationUnknown:
+		reason := findMitigationUnknownReason(f)
+		return fmt.Sprintf("Temporary configuration mitigation (CVE-2026-109619): UNKNOWN (%s).", reason)
+
+	default:
+		return ""
+	}
 }
 
-func restartHintsForSAPI(sapi inventory.SAPI) []string {
-	switch sapi {
+func restartHints(f match.Finding) []string {
+	if f.Verdict == match.VerdictPatched {
+		return nil
+	}
+	inst := f.Install
+	if inst.Source == inventory.SourceRemote {
+		return nil
+	}
+	if inst.Source == inventory.SourceImage {
+		return []string{"rebuild and redeploy the image, restarting a container does not change PHP baked into the image"}
+	}
+	if inst.Source == inventory.SourcePath {
+		return []string{PathRestartHint}
+	}
+	return localRestartHints(inst)
+}
+
+func localRestartHints(inst inventory.PHPInstall) []string {
+	switch inst.SAPI {
 	case inventory.SAPIFPM:
+		unit := "php-fpm"
+		if inst.PackageName != "" && strings.HasPrefix(inst.PackageName, "php") && strings.HasSuffix(inst.PackageName, "-fpm") {
+			unit = inst.PackageName
+		} else if strings.Contains(inst.BinaryPath, "php-fpm") {
+			base := filepath.Base(inst.BinaryPath)
+			if strings.HasPrefix(base, "php-fpm") {
+				unit = base
+			}
+		}
+		if unit != "php-fpm" {
+			return []string{fmt.Sprintf("reload php-fpm (e.g. systemctl reload %s)", unit)}
+		}
 		return []string{"reload php-fpm (e.g. systemctl reload php-fpm)"}
+
 	case inventory.SAPIApache2Handler:
-		return []string{"reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)"}
+		switch strings.ToLower(inst.Distro.ID) {
+		case "rhel", "centos", "rocky", "almalinux", "fedora", "ol", "amzn":
+			return []string{"reload Apache (e.g. systemctl reload httpd)"}
+		case "debian", "ubuntu", "kali":
+			return []string{"reload Apache (e.g. systemctl reload apache2)"}
+		default:
+			return []string{"reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)"}
+		}
+
 	case inventory.SAPILiteSpeed:
 		return []string{"reload LiteSpeed (e.g. systemctl reload lsws)"}
 	case inventory.SAPIFrankenPHP:
