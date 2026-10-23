@@ -418,3 +418,112 @@ func TestApkInstalledAndUnsupportedRPMDatabase(t *testing.T) {
 		}
 	})
 }
+
+func TestApache2HandlerNeverHasCLIBinaryTarget(t *testing.T) {
+	t.Parallel()
+
+	t.Run("source built apache with libphp.so and php cli binary", func(t *testing.T) {
+		t.Parallel()
+		layer := makeLayerFromEntries(t, []tarEntry{
+			{name: "etc/os-release", body: []byte("ID=debian\nVERSION_ID=\"12\"\n")},
+			{name: "usr/local/include/php/main/php_version.h", body: []byte("#define PHP_VERSION \"8.3.35\"\n")},
+			{name: "usr/local/bin/php", body: []byte("\x7fELF\x00PHP/8.3.35\x00")},
+			{name: "usr/lib/apache2/modules/libphp.so", body: []byte("\x7fELF\x00PHP/8.3.35\x00")},
+		})
+		img := buildTestImage(t, []string{"PHP_VERSION=8.3.35"}, []string{"docker-php-entrypoint"}, []string{"apache2-foreground"}, layer)
+		c := image.NewCollector(image.Options{Offline: true})
+		installs, err := c.InspectImage(context.Background(), img, "php:8.3.35-apache")
+		if err != nil {
+			t.Fatalf("InspectImage: %v", err)
+		}
+
+		var foundApache, foundCLI bool
+		for _, inst := range installs {
+			if inst.SAPI == inventory.SAPIApache2Handler {
+				foundApache = true
+				if inst.BinaryPath != "" {
+					t.Errorf("apache2handler must have empty BinaryPath, got %q", inst.BinaryPath)
+				}
+				if strings.Contains(inst.ModulePath, "/bin/php") || strings.HasSuffix(inst.ModulePath, "/php") {
+					t.Errorf("apache2handler ModulePath must never be a CLI binary, got %q", inst.ModulePath)
+				}
+				if inst.ModulePath != "/usr/lib/apache2/modules/libphp.so" {
+					t.Errorf("apache2handler ModulePath = %q, want /usr/lib/apache2/modules/libphp.so", inst.ModulePath)
+				}
+			}
+			if inst.SAPI == inventory.SAPICLI {
+				foundCLI = true
+				if inst.BinaryPath != "/usr/local/bin/php" {
+					t.Errorf("cli BinaryPath = %q, want /usr/local/bin/php", inst.BinaryPath)
+				}
+			}
+		}
+		if !foundApache || !foundCLI {
+			t.Fatalf("expected both apache and cli installs, got apache=%v cli=%v (total %d installs)", foundApache, foundCLI, len(installs))
+		}
+	})
+
+	t.Run("source built apache with missing .so falling back to config file", func(t *testing.T) {
+		t.Parallel()
+		layer := makeLayerFromEntries(t, []tarEntry{
+			{name: "etc/os-release", body: []byte("ID=debian\nVERSION_ID=\"12\"\n")},
+			{name: "usr/local/include/php/main/php_version.h", body: []byte("#define PHP_VERSION \"8.3.35\"\n")},
+			{name: "usr/local/bin/php", body: []byte("\x7fELF\x00PHP/8.3.35\x00")},
+			{name: "etc/apache2/apache2.conf", body: []byte("ServerRoot /etc/apache2\n")},
+		})
+		img := buildTestImage(t, []string{"PHP_VERSION=8.3.35"}, []string{"docker-php-entrypoint"}, []string{"apache2-foreground"}, layer)
+		c := image.NewCollector(image.Options{Offline: true})
+		installs, err := c.InspectImage(context.Background(), img, "php:8.3.35-apache")
+		if err != nil {
+			t.Fatalf("InspectImage: %v", err)
+		}
+
+		for _, inst := range installs {
+			if inst.SAPI == inventory.SAPIApache2Handler {
+				if inst.BinaryPath != "" {
+					t.Errorf("apache2handler must have empty BinaryPath, got %q", inst.BinaryPath)
+				}
+				if strings.Contains(inst.ModulePath, "/bin/php") || strings.HasSuffix(inst.ModulePath, "/php") {
+					t.Errorf("apache2handler ModulePath must never be a CLI binary, got %q", inst.ModulePath)
+				}
+				if inst.ModulePath != "/etc/apache2/apache2.conf" {
+					t.Errorf("expected config fallback as ModulePath, got %q", inst.ModulePath)
+				}
+				evJoined := strings.Join(inst.Evidence, "\n")
+				if !strings.Contains(evJoined, "apache module file not found on disk; discovered via config") {
+					t.Errorf("expected fallback config note in Evidence, got:\n%s", evJoined)
+				}
+			}
+		}
+	})
+
+	t.Run("dpkg libapache2-mod-php package", func(t *testing.T) {
+		t.Parallel()
+		dpkgStatus := `Package: libapache2-mod-php8.3
+Status: install ok installed
+Version: 2:8.3.35-1+deb12u1
+Architecture: amd64
+`
+		layer := makeLayerFromEntries(t, []tarEntry{
+			{name: "etc/os-release", body: []byte("ID=debian\nVERSION_ID=\"12\"\n")},
+			{name: "var/lib/dpkg/status", body: []byte(dpkgStatus)},
+			{name: "usr/lib/apache2/modules/libphp8.3.so", body: []byte("ELF")},
+		})
+		img := buildTestImage(t, nil, nil, nil, layer)
+		c := image.NewCollector(image.Options{Offline: true})
+		installs, err := c.InspectImage(context.Background(), img, "debian:php-apache")
+		if err != nil || len(installs) != 1 {
+			t.Fatalf("InspectImage: err=%v, installs=%+v", err, installs)
+		}
+		inst := installs[0]
+		if inst.SAPI != inventory.SAPIApache2Handler {
+			t.Fatalf("SAPI = %q, want apache2handler", inst.SAPI)
+		}
+		if inst.BinaryPath != "" {
+			t.Errorf("apache2handler BinaryPath must be empty, got %q", inst.BinaryPath)
+		}
+		if inst.ModulePath != "/usr/lib/apache2/modules/libphp8.3.so" {
+			t.Errorf("ModulePath = %q, want /usr/lib/apache2/modules/libphp8.3.so", inst.ModulePath)
+		}
+	})
+}

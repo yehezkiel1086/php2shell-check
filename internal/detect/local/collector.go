@@ -536,7 +536,7 @@ func (c *HostCollector) discoverConfigsForInstall(ctx context.Context, inst *inv
 	}
 
 	// (c) Official-image layout: /usr/local/etc/php and /usr/local/etc/php/conf.d
-	if isUsrLocalPrefix || (inst.Source == inventory.SourceImage && strings.HasPrefix(targetAbsPath, "/usr/local/")) {
+	if isUsrLocalPrefix || (inst.Source == inventory.SourceImage && (strings.HasPrefix(targetAbsPath, "/usr/local/") || c.dirExistsInFS("usr/local/etc/php") || c.fileExistsInFS("usr/local/include/php/main/php_version.h"))) {
 		if c.fileExistsInFS("usr/local/etc/php/php.ini") {
 			locatedAnyConfig = true
 			stage1IniFiles = append(stage1IniFiles, "usr/local/etc/php/php.ini")
