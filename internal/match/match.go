@@ -218,7 +218,7 @@ func evaluateVerdict(inst inventory.PHPInstall, upstreamVer phpver.Version, adv 
 
 	// 1. If distro-managed, check for a matching Verified DistroFixes entry first.
 	if distroManaged {
-		if df, ok := findVerifiedDistroFix(inst, adv.DistroFixes); ok {
+		if df, ok := FindVerifiedDistroFix(inst, adv.DistroFixes); ok {
 			cmp, err := compareDistroVersions(inst.PackageManager, inst.Distro.ID, inst.PackageVersion, df.FixedVersion)
 			if err != nil {
 				return VerdictUnknown, fmt.Sprintf("cannot compare distro package version %q with %q: %v", inst.PackageVersion, df.FixedVersion, err), df.FixedVersion
@@ -286,7 +286,8 @@ func hasVerifiedUpstreamFix(b advisory.BranchAdvisory) bool {
 	return true
 }
 
-func findVerifiedDistroFix(inst inventory.PHPInstall, fixes []advisory.DistroFix) (advisory.DistroFix, bool) {
+// FindVerifiedDistroFix searches for a verified DistroFix entry matching the installation.
+func FindVerifiedDistroFix(inst inventory.PHPInstall, fixes []advisory.DistroFix) (advisory.DistroFix, bool) {
 	if inst.Distro.ID == "" || inst.Distro.VersionID == "" || inst.PackageName == "" {
 		return advisory.DistroFix{}, false
 	}
