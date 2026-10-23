@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
@@ -114,12 +116,21 @@ func applyLayerTar(r io.Reader, fs *FlatFS, opts FlattenOptions) error {
 		}
 
 		switch hdr.Typeflag {
-		case tar.TypeSymlink, tar.TypeLink:
+		case tar.TypeSymlink:
 			if err := validateLinkTarget(cleanPath, hdr.Linkname); err != nil {
 				return err
 			}
 			delete(fs.Files, cleanPath)
 			fs.Symlinks[cleanPath] = hdr.Linkname
+
+		case tar.TypeLink:
+			// Tar hardlinks are always relative to the archive root.
+			hardTarget := "/" + strings.TrimPrefix(strings.ReplaceAll(hdr.Linkname, `\`, "/"), "/")
+			if err := validateLinkTarget(cleanPath, hardTarget); err != nil {
+				return err
+			}
+			delete(fs.Files, cleanPath)
+			fs.Symlinks[cleanPath] = hardTarget
 
 		case tar.TypeReg:
 			if !isRelevantImageFile(cleanPath) {
@@ -176,6 +187,10 @@ func isRelevantImageFile(cleanPath string) bool {
 
 	if (strings.HasPrefix(lower, "etc/") || strings.HasPrefix(lower, "usr/local/etc/") || strings.HasPrefix(lower, "opt/")) &&
 		(strings.HasSuffix(lower, ".ini") || strings.HasSuffix(lower, ".conf")) {
+		return true
+	}
+	if (strings.HasPrefix(lower, "usr/lib/php/") || strings.HasPrefix(lower, "usr/share/php/")) &&
+		(strings.HasSuffix(lower, ".ini") || strings.Contains(lower, "php.ini")) {
 		return true
 	}
 
@@ -281,13 +296,22 @@ func applyExplicitWhiteout(fs *FlatFS, targetPath string) {
 	}
 }
 
-// SortedPathsWithPrefix returns all file paths in FlatFS matching prefix in lexicographical order.
+// SortedPathsWithPrefix returns all file and symlink paths in FlatFS matching prefix in lexicographical order.
 func (f *FlatFS) SortedPathsWithPrefix(prefix string) []string {
-	var out []string
+	seen := make(map[string]struct{})
 	for p := range f.Files {
 		if strings.HasPrefix(p, prefix) {
-			out = append(out, p)
+			seen[p] = struct{}{}
 		}
+	}
+	for p := range f.Symlinks {
+		if strings.HasPrefix(p, prefix) {
+			seen[p] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
 	}
 	sort.Strings(out)
 	return out
@@ -300,4 +324,185 @@ func (f *FlatFS) Reader(relPath string) (*bytes.Reader, bool) {
 		return nil, false
 	}
 	return bytes.NewReader(data), true
+}
+
+// ReadLink returns the target of a symlink stored in FlatFS.
+func (f *FlatFS) ReadLink(name string) (string, error) {
+	clean := path.Clean(strings.TrimPrefix(name, "/"))
+	if target, ok := f.Symlinks[clean]; ok {
+		return target, nil
+	}
+	return "", fs.ErrNotExist
+}
+
+// Open implements io/fs.FS on FlatFS.
+func (f *FlatFS) Open(name string) (fs.File, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
+	if name == "." {
+		return &flatDir{name: ".", entries: f.readDirEntries("")}, nil
+	}
+	if data, ok := f.Files[name]; ok {
+		return &flatFile{
+			name:   path.Base(name),
+			reader: bytes.NewReader(data),
+			size:   int64(len(data)),
+			mode:   0o644,
+		}, nil
+	}
+	if target, ok := f.Symlinks[name]; ok {
+		b := []byte(target)
+		return &flatFile{
+			name:   path.Base(name),
+			reader: bytes.NewReader(b),
+			size:   int64(len(b)),
+			mode:   fs.ModeSymlink | 0o777,
+		}, nil
+	}
+	if f.hasSubdir(name) {
+		return &flatDir{name: path.Base(name), entries: f.readDirEntries(name)}, nil
+	}
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+}
+
+// Stat implements io/fs.StatFS on FlatFS.
+func (f *FlatFS) Stat(name string) (fs.FileInfo, error) {
+	file, err := f.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return file.Stat()
+}
+
+// ReadDir implements io/fs.ReadDirFS on FlatFS.
+func (f *FlatFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
+	}
+	if name != "." && !f.hasSubdir(name) {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrNotExist}
+	}
+	dir := ""
+	if name != "." {
+		dir = name
+	}
+	return f.readDirEntries(dir), nil
+}
+
+func (f *FlatFS) hasSubdir(dir string) bool {
+	prefix := dir + "/"
+	for p := range f.Files {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	for p := range f.Symlinks {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *FlatFS) readDirEntries(dir string) []fs.DirEntry {
+	prefix := ""
+	if dir != "" {
+		prefix = dir + "/"
+	}
+	byName := make(map[string]fs.DirEntry)
+
+	addEntry := func(fullPath string, size int64, mode fs.FileMode) {
+		if !strings.HasPrefix(fullPath, prefix) {
+			return
+		}
+		rest := strings.TrimPrefix(fullPath, prefix)
+		if rest == "" {
+			return
+		}
+		if slash := strings.IndexByte(rest, '/'); slash >= 0 {
+			childDir := rest[:slash]
+			byName[childDir] = &flatFileInfo{name: childDir, mode: fs.ModeDir | 0o755}
+			return
+		}
+		byName[rest] = &flatFileInfo{name: rest, size: size, mode: mode}
+	}
+
+	for p, data := range f.Files {
+		addEntry(p, int64(len(data)), 0o644)
+	}
+	for p, target := range f.Symlinks {
+		addEntry(p, int64(len(target)), fs.ModeSymlink|0o777)
+	}
+
+	names := make([]string, 0, len(byName))
+	for n := range byName {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	entries := make([]fs.DirEntry, 0, len(names))
+	for _, n := range names {
+		entries = append(entries, byName[n])
+	}
+	return entries
+}
+
+type flatFileInfo struct {
+	name string
+	size int64
+	mode fs.FileMode
+}
+
+func (fi *flatFileInfo) Name() string               { return fi.name }
+func (fi *flatFileInfo) Size() int64                { return fi.size }
+func (fi *flatFileInfo) Mode() fs.FileMode          { return fi.mode }
+func (fi *flatFileInfo) ModTime() time.Time         { return time.Time{} }
+func (fi *flatFileInfo) IsDir() bool                { return fi.mode.IsDir() }
+func (fi *flatFileInfo) Sys() any                   { return nil }
+func (fi *flatFileInfo) Type() fs.FileMode          { return fi.mode.Type() }
+func (fi *flatFileInfo) Info() (fs.FileInfo, error) { return fi, nil }
+
+type flatFile struct {
+	name   string
+	reader *bytes.Reader
+	size   int64
+	mode   fs.FileMode
+}
+
+func (ff *flatFile) Stat() (fs.FileInfo, error) {
+	return &flatFileInfo{name: ff.name, size: ff.size, mode: ff.mode}, nil
+}
+func (ff *flatFile) Read(b []byte) (int, error) { return ff.reader.Read(b) }
+func (ff *flatFile) Close() error               { return nil }
+
+type flatDir struct {
+	name    string
+	entries []fs.DirEntry
+	offset  int
+}
+
+func (fd *flatDir) Stat() (fs.FileInfo, error) {
+	return &flatFileInfo{name: fd.name, mode: fs.ModeDir | 0o755}, nil
+}
+func (fd *flatDir) Read([]byte) (int, error) {
+	return 0, &fs.PathError{Op: "read", Path: fd.name, Err: fs.ErrInvalid}
+}
+func (fd *flatDir) Close() error { return nil }
+func (fd *flatDir) ReadDir(n int) ([]fs.DirEntry, error) {
+	if fd.offset >= len(fd.entries) {
+		if n <= 0 {
+			return nil, nil
+		}
+		return nil, io.EOF
+	}
+	if n <= 0 || fd.offset+n > len(fd.entries) {
+		out := fd.entries[fd.offset:]
+		fd.offset = len(fd.entries)
+		return out, nil
+	}
+	out := fd.entries[fd.offset : fd.offset+n]
+	fd.offset += n
+	return out, nil
 }

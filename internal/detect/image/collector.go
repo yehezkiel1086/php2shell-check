@@ -232,9 +232,10 @@ func (c *Collector) InspectImage(ctx context.Context, img v1.Image, imageRef str
 
 	// 3. Check for unsupported RPM databases if no package-managed or source-built install covered it.
 	if rpmPath, hasRPM := hasRPMDatabase(flat); hasRPM && len(pkgInstalls) == 0 {
+		binPath := findFirstPHPBinary(flat)
 		rpmInst := inventory.PHPInstall{
 			ID:             inventory.ComputeID(inventory.SourceImage, sapiHint, imageRef+":rpm"),
-			BinaryPath:     findFirstPHPBinary(flat),
+			BinaryPath:     binPath,
 			PackageManager: "rpm",
 			Distro:         distro,
 			SAPI:           sapiHint,
@@ -244,7 +245,7 @@ func (c *Collector) InspectImage(ctx context.Context, img v1.Image, imageRef str
 				fmt.Sprintf("rpm_db_unsupported: /%s present; offline RPM database parsing is unsupported without guessing", rpmPath),
 			},
 		}
-		parseAllImageStaticConfigs(flat, "", &rpmInst)
+		local.DiscoverStaticConfigs(flat, &rpmInst, "", binPath)
 		installs = append(installs, rpmInst)
 	}
 
@@ -302,12 +303,22 @@ func (c *Collector) detectSourceBuiltPHP(
 	var version string
 	var evidence []string
 
-	// Check /usr/local/include/php/main/php_version.h
-	const headerPath = "usr/local/include/php/main/php_version.h"
-	if data, ok := flat.Files[headerPath]; ok {
-		if v, okVer := ParsePHPVersionHeader(data); okVer {
-			version = v
-			evidence = append(evidence, fmt.Sprintf("php_version_h: /%s => %s", headerPath, v))
+	// Check /usr/local/include/php/main/php_version.h and /opt/php/*/include/php/main/php_version.h
+	headerCandidates := []string{"usr/local/include/php/main/php_version.h"}
+	for _, p := range flat.SortedPathsWithPrefix("opt/php/") {
+		if strings.HasSuffix(p, "/include/php/main/php_version.h") {
+			headerCandidates = append(headerCandidates, p)
+		}
+	}
+	var matchedHeaderPath string
+	for _, hp := range headerCandidates {
+		if data, ok := flat.Files[hp]; ok {
+			if v, okVer := ParsePHPVersionHeader(data); okVer {
+				version = v
+				matchedHeaderPath = hp
+				evidence = append(evidence, fmt.Sprintf("php_version_h: /%s => %s", hp, v))
+				break
+			}
 		}
 	}
 
@@ -326,27 +337,45 @@ func (c *Collector) detectSourceBuiltPHP(
 		}
 	}
 
-	// Check binary byte scan for /usr/local/bin/php, /usr/local/sbin/php-fpm, or /usr/local/bin/frankenphp
+	// Check binary byte scan for /usr/local/bin/php, /usr/local/sbin/php-fpm, /usr/local/bin/frankenphp, or /opt/php/*
 	binCandidates := []string{
 		"usr/local/sbin/php-fpm",
 		"usr/local/bin/frankenphp",
 		"usr/local/bin/php",
 		"usr/lib/apache2/modules/libphp.so",
 	}
+	for _, p := range flat.SortedPathsWithPrefix("opt/php/") {
+		if strings.HasSuffix(p, "/sbin/php-fpm") || strings.HasSuffix(p, "/bin/php") {
+			binCandidates = append(binCandidates, p)
+		}
+	}
+
 	var primaryPath string
+	seenResolvedBin := make(map[string]bool)
 	for _, cand := range binCandidates {
-		data, ok := flat.Files[cand]
+		resolvedRel, escaped, resErr := local.ResolvePathInFS(flat, cand, false)
+		if escaped || resErr != nil || resolvedRel == "" {
+			continue
+		}
+		data, ok := flat.Files[resolvedRel]
 		if !ok {
 			continue
 		}
 		if primaryPath == "" {
-			primaryPath = "/" + cand
+			primaryPath = "/" + resolvedRel
 		}
+		if resolvedRel != cand {
+			evidence = append(evidence, fmt.Sprintf("found via /%s", cand))
+		}
+		if seenResolvedBin[resolvedRel] {
+			continue
+		}
+		seenResolvedBin[resolvedRel] = true
 		if scannedVer, matched, err := local.ScanModuleBytes(bytes.NewReader(data), c.opts.MaxFileBytes); err == nil {
 			if version == "" {
 				version = scannedVer
 			}
-			evidence = append(evidence, fmt.Sprintf("binary_bytes: /%s => %s", cand, matched))
+			evidence = append(evidence, fmt.Sprintf("binary_bytes: /%s => %s", resolvedRel, matched))
 		}
 	}
 
@@ -355,7 +384,11 @@ func (c *Collector) detectSourceBuiltPHP(
 	}
 
 	if primaryPath == "" {
-		primaryPath = "/" + headerPath
+		if matchedHeaderPath != "" {
+			primaryPath = "/" + matchedHeaderPath
+		} else {
+			primaryPath = "/usr/local/include/php/main/php_version.h"
+		}
 	}
 	if sapiEv != "" {
 		evidence = append(evidence, sapiEv)
@@ -377,18 +410,7 @@ func (c *Collector) detectSourceBuiltPHP(
 	if parsed, err := phpver.Parse(version); err == nil {
 		branch = parsed.Branch
 	}
-	parseAllImageStaticConfigs(flat, branch, &inst)
-
-	// In official /usr/local PHP images, if no php.ini or conf.d/*.ini overrode the compiled-in
-	// defaults, record PHP's default values so unmitigated images report NOT_APPLIED rather than UNKNOWN.
-	if _, ok := inst.IniSettings["session.upload_progress.enabled"]; !ok {
-		inst.SetIniSetting("session.upload_progress.enabled", "1", "/usr/local/etc/php (PHP compiled-in default)")
-	}
-	if branch == "8.5" {
-		if _, ok := inst.IniSettings["fatal_error_backtraces"]; !ok {
-			inst.SetIniSetting("fatal_error_backtraces", "1", "/usr/local/etc/php (PHP compiled-in default)")
-		}
-	}
+	local.DiscoverStaticConfigs(flat, &inst, branch, primaryPath)
 
 	return inst, true
 }
@@ -400,14 +422,28 @@ func (c *Collector) detectPackageManagedPHP(flat *FlatFS, distro inventory.Distr
 		records = append(records, ParseDpkgStatus(data, "/var/lib/dpkg/status")...)
 	}
 	for _, p := range flat.SortedPathsWithPrefix("var/lib/dpkg/status.d/") {
-		records = append(records, ParseDpkgStatus(flat.Files[p], "/"+p)...)
+		if data, ok := flat.Files[p]; ok {
+			records = append(records, ParseDpkgStatus(data, "/"+p)...)
+		}
 	}
 	if data, ok := flat.Files["lib/apk/db/installed"]; ok {
 		records = append(records, ParseApkInstalled(data, "/lib/apk/db/installed")...)
 	}
 
+	// Filter redundant Debian bare metapackages (e.g. "php8.3", "php") when concrete SAPI packages
+	// (e.g. "php8.3-cli", "php8.3-fpm", "libapache2-mod-php8.3") for the same upstream version exist.
+	hasConcreteDebPkg := make(map[string]bool)
+	for _, rec := range records {
+		if rec.Manager == "deb" && !isBareVersionedPHPPkg(strings.ToLower(rec.Name)) {
+			hasConcreteDebPkg[rec.UpstreamVersion] = true
+		}
+	}
+
 	var installs []inventory.PHPInstall
 	for _, rec := range records {
+		if rec.Manager == "deb" && isBareVersionedPHPPkg(strings.ToLower(rec.Name)) && hasConcreteDebPkg[rec.UpstreamVersion] {
+			continue
+		}
 		inst := inventory.PHPInstall{
 			ID:              inventory.ComputeID(inventory.SourceImage, rec.SAPI, rec.Name+"@"+rec.Version),
 			UpstreamVersion: rec.UpstreamVersion,
@@ -428,98 +464,11 @@ func (c *Collector) detectPackageManagedPHP(flat *FlatFS, distro inventory.Distr
 		if parsed, err := phpver.Parse(rec.UpstreamVersion); err == nil {
 			branch = parsed.Branch
 		}
-		parseAllImageStaticConfigs(flat, branch, &inst)
+		local.DiscoverStaticConfigs(flat, &inst, branch, "")
 		installs = append(installs, inst)
 	}
 
 	return installs
-}
-
-func parseAllImageStaticConfigs(flat *FlatFS, branch string, inst *inventory.PHPInstall) {
-	// Parse active /usr/local/etc/php/php.ini and distro /etc/php configs (never parse inactive php.ini-production templates).
-	iniCandidates := []string{
-		"usr/local/etc/php/php.ini",
-		"etc/php.ini",
-	}
-	if branch != "" {
-		switch inst.SAPI {
-		case inventory.SAPIFPM:
-			iniCandidates = append(iniCandidates, fmt.Sprintf("etc/php/%s/fpm/php.ini", branch))
-		case inventory.SAPIApache2Handler:
-			iniCandidates = append(iniCandidates, fmt.Sprintf("etc/php/%s/apache2/php.ini", branch))
-		case inventory.SAPICLI:
-			iniCandidates = append(iniCandidates, fmt.Sprintf("etc/php/%s/cli/php.ini", branch))
-		default:
-			iniCandidates = append(iniCandidates,
-				fmt.Sprintf("etc/php/%s/fpm/php.ini", branch),
-				fmt.Sprintf("etc/php/%s/apache2/php.ini", branch),
-				fmt.Sprintf("etc/php/%s/cli/php.ini", branch),
-			)
-		}
-	}
-
-	for _, rel := range iniCandidates {
-		if r, ok := flat.Reader(rel); ok {
-			abs := "/" + rel
-			inst.AddConfigFile(abs)
-			_ = local.ParseIniReader(r, abs, inst)
-		}
-	}
-
-	iniPrefixes := []string{
-		"usr/local/etc/php/conf.d/",
-		"etc/php.d/",
-	}
-	if branch != "" {
-		switch inst.SAPI {
-		case inventory.SAPIFPM:
-			iniPrefixes = append(iniPrefixes, fmt.Sprintf("etc/php/%s/fpm/conf.d/", branch))
-		case inventory.SAPIApache2Handler:
-			iniPrefixes = append(iniPrefixes, fmt.Sprintf("etc/php/%s/apache2/conf.d/", branch))
-		case inventory.SAPICLI:
-			iniPrefixes = append(iniPrefixes, fmt.Sprintf("etc/php/%s/cli/conf.d/", branch))
-		default:
-			iniPrefixes = append(iniPrefixes,
-				fmt.Sprintf("etc/php/%s/fpm/conf.d/", branch),
-				fmt.Sprintf("etc/php/%s/apache2/conf.d/", branch),
-				fmt.Sprintf("etc/php/%s/cli/conf.d/", branch),
-			)
-		}
-	}
-
-	for _, pref := range iniPrefixes {
-		for _, rel := range flat.SortedPathsWithPrefix(pref) {
-			if !strings.HasSuffix(rel, ".ini") {
-				continue
-			}
-			if r, ok := flat.Reader(rel); ok {
-				abs := "/" + rel
-				inst.AddConfigFile(abs)
-				_ = local.ParseIniReader(r, abs, inst)
-			}
-		}
-	}
-
-	poolPrefixes := []string{
-		"usr/local/etc/php-fpm.d/",
-		"etc/php-fpm.d/",
-	}
-	if branch != "" {
-		poolPrefixes = append(poolPrefixes, fmt.Sprintf("etc/php/%s/fpm/pool.d/", branch))
-	}
-
-	for _, pref := range poolPrefixes {
-		for _, rel := range flat.SortedPathsWithPrefix(pref) {
-			if !strings.HasSuffix(rel, ".conf") {
-				continue
-			}
-			if r, ok := flat.Reader(rel); ok {
-				abs := "/" + rel
-				inst.AddConfigFile(abs)
-				_ = local.ParseFPMPoolReader(r, abs, inst)
-			}
-		}
-	}
 }
 
 func hasRPMDatabase(flat *FlatFS) (string, bool) {

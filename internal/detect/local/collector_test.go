@@ -12,8 +12,10 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/yehezkiel1086/php2shell-check/internal/advisory"
 	"github.com/yehezkiel1086/php2shell-check/internal/detect/local"
 	"github.com/yehezkiel1086/php2shell-check/internal/inventory"
+	"github.com/yehezkiel1086/php2shell-check/internal/match"
 )
 
 type fakeResponse struct {
@@ -343,4 +345,296 @@ func TestScanModuleBytesCapAndChunkBoundary(t *testing.T) {
 	if !errors.Is(err, local.ErrVersionNotFound) {
 		t.Fatalf("ScanModuleBytes past cap error = %v, want ErrVersionNotFound", err)
 	}
+}
+
+func build500LineWWWConfWithMitigationAtLine491() []byte {
+	var lines []string
+	lines = append(lines, "[www]")
+	for len(lines) < 490 {
+		lines = append(lines, fmt.Sprintf("; comment line %d", len(lines)+1))
+	}
+	// Line 491 (1-indexed):
+	lines = append(lines, "php_admin_value[session.upload_progress.enabled] = 0")
+	for len(lines) < 500 {
+		lines = append(lines, fmt.Sprintf("; trailing comment line %d", len(lines)+1))
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func TestRegressionOptPHP8335SymlinkAndFPMPoolLine491(t *testing.T) {
+	t.Parallel()
+
+	adv, err := advisory.LoadEmbedded()
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+
+	phpVCLI := []byte("PHP 8.3.35 (cli) (built: Oct 23 2026 12:01:13) (NTS)\n")
+	phpVFPM := []byte("PHP 8.3.35 (fpm-fcgi) (built: Oct 23 2026 12:01:18)\n")
+	phpIniOut := []byte(strings.Join([]string{
+		"Configuration File (php.ini) Path: /opt/php/8.3.35/etc",
+		"Loaded Configuration File:         /opt/php/8.3.35/etc/php.ini",
+		"Scan for additional .ini files in: /opt/php/8.3.35/etc/conf.d",
+		"Additional .ini files parsed:      (none)",
+	}, "\n") + "\n")
+
+	wwwConf := build500LineWWWConfWithMitigationAtLine491()
+
+	variants := []struct {
+		name           string
+		fpmConfContent string
+		wantFallbackEv bool
+	}{
+		{
+			name:           "active include directive",
+			fpmConfContent: "[global]\ninclude=etc/php-fpm.d/*.conf\n",
+			wantFallbackEv: false,
+		},
+		{
+			name:           "commented out include directive",
+			fpmConfContent: "[global]\n;include=etc/php-fpm.d/*.conf\n",
+			wantFallbackEv: true,
+		},
+	}
+
+	for _, tc := range variants {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mapFS := fstest.MapFS{
+				"opt/php/8.3.35/bin/php":                 {Data: []byte("ELF"), Mode: 0o755},
+				"opt/php/8.3.35/sbin/php-fpm":            {Data: []byte("ELF"), Mode: 0o755},
+				"usr/local/bin/php":                      {Data: []byte("/opt/php/8.3.35/bin/php"), Mode: fs.ModeSymlink | 0o777},
+				"usr/local/sbin/php-fpm":                 {Data: []byte("/opt/php/8.3.35/sbin/php-fpm"), Mode: fs.ModeSymlink | 0o777},
+				"opt/php/8.3.35/etc/php.ini":             {Data: []byte("; default php.ini\n")},
+				"opt/php/8.3.35/etc/conf.d/.keep":        {Data: []byte("")},
+				"opt/php/8.3.35/etc/php-fpm.conf":        {Data: []byte(tc.fpmConfContent)},
+				"opt/php/8.3.35/etc/php-fpm.d/www.conf":  {Data: wwwConf},
+			}
+
+			runner := &fakeRunner{
+				responses: map[string]fakeResponse{
+					"/opt/php/8.3.35/bin/php -v":       {stdout: phpVCLI},
+					"/opt/php/8.3.35/bin/php --ini":    {stdout: phpIniOut},
+					"/opt/php/8.3.35/sbin/php-fpm -v":  {stdout: phpVFPM},
+					"/usr/local/bin/php -v":            {stdout: phpVCLI},
+					"/usr/local/sbin/php-fpm -v":       {stdout: phpVFPM},
+				},
+			}
+
+			collector := local.NewCollector(local.Config{
+				FS:      mapFS,
+				Runner:  runner,
+				PathEnv: "/usr/local/sbin:/usr/local/bin",
+			})
+
+			installs, collectErr := collector.Collect(context.Background())
+			if collectErr != nil {
+				t.Fatalf("Collect: %v", collectErr)
+			}
+
+			byTarget := make(map[string]inventory.PHPInstall)
+			for _, inst := range installs {
+				byTarget[inst.BinaryPath] = inst
+			}
+
+			fpmInst, ok := byTarget["/opt/php/8.3.35/sbin/php-fpm"]
+			if !ok {
+				t.Fatalf("expected TARGET /opt/php/8.3.35/sbin/php-fpm, got targets: %v", installs)
+			}
+			if _, dup := byTarget["/usr/local/sbin/php-fpm"]; dup {
+				t.Fatalf("expected symlink /usr/local/sbin/php-fpm to be deduplicated into /opt/php/8.3.35/sbin/php-fpm")
+			}
+
+			fpmFinding := match.Evaluate(fpmInst, adv)
+			if got := fpmFinding.Mitigation["CVE-2026-109619"]; got != match.MitigationApplied {
+				t.Errorf("fpm CVE-2026-109619 mitigation = %s, want APPLIED (evidence: %v)", got, fpmInst.Evidence)
+			}
+			fpmEv := strings.Join(fpmInst.Evidence, "\n")
+			if !strings.Contains(fpmEv, "www.conf:491") {
+				t.Errorf("fpm Evidence missing 'www.conf:491':\n%s", fpmEv)
+			}
+			if !strings.Contains(fpmEv, "found via /usr/local/sbin/php-fpm") {
+				t.Errorf("fpm Evidence missing 'found via /usr/local/sbin/php-fpm':\n%s", fpmEv)
+			}
+			if tc.wantFallbackEv && !strings.Contains(fpmEv, "pool dir found by default location") {
+				t.Errorf("fpm Evidence missing 'pool dir found by default location':\n%s", fpmEv)
+			}
+
+			cliInst, ok := byTarget["/opt/php/8.3.35/bin/php"]
+			if !ok {
+				t.Fatalf("expected TARGET /opt/php/8.3.35/bin/php, got targets: %v", installs)
+			}
+			cliFinding := match.Evaluate(cliInst, adv)
+			if got := cliFinding.Mitigation["CVE-2026-109619"]; got != match.MitigationNotApplied {
+				t.Errorf("cli CVE-2026-109619 mitigation = %s, want NOT_APPLIED (evidence: %v)", got, cliInst.Evidence)
+			}
+		})
+	}
+}
+
+func TestRegressionAcceptanceVariants(t *testing.T) {
+	t.Parallel()
+
+	adv, err := advisory.LoadEmbedded()
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+
+	t.Run("conflicting pools ([www]=0, [admin]=1 -> NOT_APPLIED naming [admin])", func(t *testing.T) {
+		t.Parallel()
+		mapFS := fstest.MapFS{
+			"opt/php/8.3.35/sbin/php-fpm":           {Data: []byte("ELF"), Mode: 0o755},
+			"opt/php/8.3.35/etc/php-fpm.conf":       {Data: []byte("[global]\ninclude=etc/php-fpm.d/*.conf\n")},
+			"opt/php/8.3.35/etc/php-fpm.d/www.conf": {Data: []byte("[www]\nphp_admin_value[session.upload_progress.enabled] = 0\n")},
+			"opt/php/8.3.35/etc/php-fpm.d/admin.conf": {Data: []byte("[admin]\nphp_admin_value[session.upload_progress.enabled] = 1\n")},
+		}
+		runner := &fakeRunner{
+			responses: map[string]fakeResponse{
+				"/opt/php/8.3.35/sbin/php-fpm -v": {stdout: []byte("PHP 8.3.35 (fpm-fcgi)\n")},
+			},
+		}
+		collector := local.NewCollector(local.Config{FS: mapFS, Runner: runner})
+		installs, err := collector.Collect(context.Background())
+		if err != nil || len(installs) != 1 {
+			t.Fatalf("Collect() = %v, err = %v", installs, err)
+		}
+		finding := match.Evaluate(installs[0], adv)
+		if got := finding.Mitigation["CVE-2026-109619"]; got != match.MitigationNotApplied {
+			t.Errorf("mitigation = %s, want NOT_APPLIED", got)
+		}
+		ev := strings.Join(installs[0].Evidence, "\n")
+		if !strings.Contains(ev, "[admin]") {
+			t.Errorf("evidence missing offending pool '[admin]':\n%s", ev)
+		}
+	})
+
+	t.Run("Debian mods-available symlink", func(t *testing.T) {
+		t.Parallel()
+		mapFS := fstest.MapFS{
+			"usr/bin/php8.3":                               {Data: []byte("ELF"), Mode: 0o755},
+			"etc/php/8.3/cli/php.ini":                      {Data: []byte("; default php.ini\n")},
+			"etc/php/8.3/cli/conf.d/20-upload.ini":         {Data: []byte("../mods-available/upload.ini"), Mode: fs.ModeSymlink | 0o777},
+			"etc/php/8.3/cli/mods-available/upload.ini":    {Data: []byte("session.upload_progress.enabled = 0\n")},
+		}
+		runner := &fakeRunner{
+			responses: map[string]fakeResponse{
+				"/usr/bin/php8.3 -v": {stdout: []byte("PHP 8.3.35 (cli)\n")},
+			},
+		}
+		collector := local.NewCollector(local.Config{FS: mapFS, Runner: runner})
+		installs, err := collector.Collect(context.Background())
+		if err != nil || len(installs) != 1 {
+			t.Fatalf("Collect() = %v, err = %v", installs, err)
+		}
+		finding := match.Evaluate(installs[0], adv)
+		if got := finding.Mitigation["CVE-2026-109619"]; got != match.MitigationApplied {
+			t.Errorf("mitigation = %s, want APPLIED (ev: %v)", got, installs[0].Evidence)
+		}
+	})
+
+	t.Run("symlink escaping root (rejected)", func(t *testing.T) {
+		t.Parallel()
+		mapFS := fstest.MapFS{
+			"usr/bin/php8.3":                       {Data: []byte("ELF"), Mode: 0o755},
+			"etc/php/8.3/cli/php.ini":              {Data: []byte("; default php.ini\n")},
+			"etc/php/8.3/cli/conf.d/99-bad.ini":    {Data: []byte("../../../../../../etc/shadow"), Mode: fs.ModeSymlink | 0o777},
+		}
+		runner := &fakeRunner{
+			responses: map[string]fakeResponse{
+				"/usr/bin/php8.3 -v": {stdout: []byte("PHP 8.3.35 (cli)\n")},
+			},
+		}
+		collector := local.NewCollector(local.Config{FS: mapFS, Runner: runner})
+		installs, err := collector.Collect(context.Background())
+		if err != nil || len(installs) != 1 {
+			t.Fatalf("Collect() = %v, err = %v", installs, err)
+		}
+		ev := strings.Join(installs[0].Evidence, "\n")
+		if !strings.Contains(ev, "symlink_rejected:") || !strings.Contains(ev, "escapes root") {
+			t.Errorf("evidence missing symlink rejection note:\n%s", ev)
+		}
+	})
+
+	t.Run("PHP 8.5 with only one of the two settings disabled (NOT_APPLIED)", func(t *testing.T) {
+		t.Parallel()
+		mapFS := fstest.MapFS{
+			"opt/php/8.5.11/bin/php":     {Data: []byte("ELF"), Mode: 0o755},
+			"opt/php/8.5.11/etc/php.ini": {Data: []byte("session.upload_progress.enabled = 0\n; fatal_error_backtraces not disabled\n")},
+		}
+		runner := &fakeRunner{
+			responses: map[string]fakeResponse{
+				"/opt/php/8.5.11/bin/php -v": {stdout: []byte("PHP 8.5.11 (cli)\n")},
+				"/opt/php/8.5.11/bin/php --ini": {stdout: []byte("Configuration File (php.ini) Path: /opt/php/8.5.11/etc\nLoaded Configuration File: /opt/php/8.5.11/etc/php.ini\n")},
+			},
+		}
+		collector := local.NewCollector(local.Config{FS: mapFS, Runner: runner})
+		installs, err := collector.Collect(context.Background())
+		if err != nil || len(installs) != 1 {
+			t.Fatalf("Collect() = %v, err = %v", installs, err)
+		}
+		finding := match.Evaluate(installs[0], adv)
+		if got := finding.Mitigation["CVE-2026-109619"]; got != match.MitigationNotApplied {
+			t.Errorf("PHP 8.5 mitigation = %s, want NOT_APPLIED", got)
+		}
+	})
+
+	t.Run("a custom prefix with no detectable config (UNKNOWN)", func(t *testing.T) {
+		t.Parallel()
+		mapFS := fstest.MapFS{
+			"opt/custom-php/bin/php": {Data: []byte("ELF"), Mode: 0o755},
+		}
+		runner := &fakeRunner{
+			responses: map[string]fakeResponse{
+				"/opt/custom-php/bin/php -v": {stdout: []byte("PHP 8.3.35 (cli)\n")},
+			},
+		}
+		collector := local.NewCollector(local.Config{
+			FS:      mapFS,
+			Runner:  runner,
+			PathEnv: "/opt/custom-php/bin",
+		})
+		installs, err := collector.Collect(context.Background())
+		if err != nil || len(installs) != 1 {
+			t.Fatalf("Collect() = %v, err = %v", installs, err)
+		}
+		finding := match.Evaluate(installs[0], adv)
+		if got := finding.Mitigation["CVE-2026-109619"]; got != match.MitigationUnknown {
+			t.Errorf("mitigation = %s, want UNKNOWN", got)
+		}
+		ev := strings.Join(installs[0].Evidence, "\n")
+		if !strings.Contains(ev, "config path not found") {
+			t.Errorf("evidence missing 'config path not found':\n%s", ev)
+		}
+	})
+
+	t.Run("files found by prefix guess but not confirmed as loaded keep UNKNOWN", func(t *testing.T) {
+		t.Parallel()
+		mapFS := fstest.MapFS{
+			"opt/custom-php/bin/php":     {Data: []byte("ELF"), Mode: 0o755},
+			"opt/custom-php/etc/php.ini": {Data: []byte("session.upload_progress.enabled = 0\n")},
+		}
+		runner := &fakeRunner{
+			responses: map[string]fakeResponse{
+				"/opt/custom-php/bin/php -v":    {stdout: []byte("PHP 8.3.35 (cli)\n")},
+				"/opt/custom-php/bin/php --ini": {stdout: []byte("Configuration File (php.ini) Path: /other/dir\nLoaded Configuration File: (none)\nScan for additional .ini files in: (none)\n")},
+			},
+		}
+		collector := local.NewCollector(local.Config{
+			FS:      mapFS,
+			Runner:  runner,
+			PathEnv: "/opt/custom-php/bin",
+		})
+		installs, err := collector.Collect(context.Background())
+		if err != nil || len(installs) != 1 {
+			t.Fatalf("Collect() = %v, err = %v", installs, err)
+		}
+		finding := match.Evaluate(installs[0], adv)
+		if got := finding.Mitigation["CVE-2026-109619"]; got != match.MitigationUnknown {
+			t.Errorf("mitigation = %s, want UNKNOWN", got)
+		}
+		ev := strings.Join(installs[0].Evidence, "\n")
+		if !strings.Contains(ev, "present but not confirmed as loaded") {
+			t.Errorf("evidence missing 'present but not confirmed as loaded':\n%s", ev)
+		}
+	})
 }

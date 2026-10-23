@@ -2,6 +2,8 @@ package local
 
 import (
 	"fmt"
+	"io/fs"
+	"path"
 	"strings"
 )
 
@@ -48,6 +50,10 @@ func DefaultSearchLocations() SearchLocations {
 			// CloudLinux Alt-PHP
 			"opt/alt/php*/usr/bin/php*",
 			"opt/alt/php*/usr/sbin/php-fpm*",
+
+			// Custom /opt/php/<version> builds
+			"opt/php/*/bin/php*",
+			"opt/php/*/sbin/php-fpm*",
 		},
 		ApacheModuleGlobs: []string{
 			"usr/lib/apache2/modules/libphp*.so",
@@ -130,4 +136,50 @@ func ApacheConfigLocations(branch string) (iniFiles, iniGlobs []string) {
 	}
 
 	return iniFiles, iniGlobs
+}
+
+// ApacheConfGlobs returns Apache server configuration file patterns (/etc/apache2 and /etc/httpd)
+// that may contain php_admin_value, php_admin_flag, php_value, and php_flag directives.
+func ApacheConfGlobs() []string {
+	return []string{
+		"etc/apache2/apache2.conf",
+		"etc/apache2/conf-enabled/*.conf",
+		"etc/apache2/mods-enabled/*.conf",
+		"etc/apache2/sites-enabled/*.conf",
+		"etc/apache2/conf.d/*.conf",
+		"etc/httpd/conf/httpd.conf",
+		"etc/httpd/conf.d/*.conf",
+		"etc/httpd/conf.modules.d/*.conf",
+	}
+}
+
+// DeriveInstallPrefix derives the installation prefix from a resolved binary path
+// (the parent directory that contains bin/ or sbin/, or the parent containing bin/ plus sbin/ or etc/).
+func DeriveInstallPrefix(fsys fs.FS, resolvedAbsPath string) string {
+	rel := toFSPath(resolvedAbsPath)
+	if rel == "" {
+		return ""
+	}
+	dir := path.Dir(rel)
+	base := path.Base(dir)
+	if base != "bin" && base != "sbin" {
+		return ""
+	}
+	parent := path.Dir(dir)
+	if parent == "." || parent == "" {
+		return "/"
+	}
+
+	// For /opt/remi/php83/root/usr or /opt/cpanel/ea-php83/root/usr or /opt/alt/php83/usr,
+	// if parent ends in /usr and its parent has etc/, return the root prefix.
+	if path.Base(parent) == "usr" && strings.HasPrefix(parent, "opt/") {
+		grand := path.Dir(parent)
+		if grand != "." && grand != "" && fsys != nil {
+			if info, err := fs.Stat(fsys, path.Join(grand, "etc")); err == nil && info.IsDir() {
+				return "/" + grand
+			}
+		}
+	}
+
+	return "/" + parent
 }

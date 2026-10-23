@@ -37,7 +37,7 @@ func NormalizeIniValue(raw string) string {
 	val = strings.TrimSpace(val)
 
 	switch strings.ToLower(val) {
-	case "off", "false", "no", "none", "0":
+	case "off", "false", "no", "none", "0", "":
 		return "0"
 	case "on", "true", "yes", "1":
 		return "1"
@@ -122,13 +122,84 @@ func inferSAPIFromVersionText(text, binPath string) inventory.SAPI {
 	}
 }
 
-// PHPInfoResult holds the parsed metadata and INI directives from `php -i`.
+// PHPInfoResult holds the parsed metadata and INI directives from `php --ini` or `php -i`.
 type PHPInfoResult struct {
 	ServerAPI          string
+	ConfigFilePath     string
 	LoadedConfigFile   string
+	LoadedConfigNone   bool
 	ScanIniDir         string
+	ScanIniDirNone     bool
 	AdditionalIniFiles []string
 	IniSettings        map[string]string
+}
+
+// ParsePHPIniOutput parses the output of `php --ini` without modifying or corrupting file paths.
+func ParsePHPIniOutput(out []byte) PHPInfoResult {
+	res := PHPInfoResult{
+		IniSettings: make(map[string]string),
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	inAdditionalIni := false
+
+	const (
+		prefixConfigPath = "Configuration File (php.ini) Path:"
+		prefixLoadedFile = "Loaded Configuration File:"
+		prefixScanDir    = "Scan for additional .ini files in:"
+		prefixAdditional = "Additional .ini files parsed:"
+	)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if inAdditionalIni {
+			if line == "" ||
+				strings.HasPrefix(line, prefixConfigPath) ||
+				strings.HasPrefix(line, prefixLoadedFile) ||
+				strings.HasPrefix(line, prefixScanDir) ||
+				strings.HasPrefix(line, prefixAdditional) {
+				inAdditionalIni = false
+			} else {
+				appendCommaSeparatedFiles(&res.AdditionalIniFiles, line)
+				if !strings.HasSuffix(line, ",") {
+					inAdditionalIni = false
+				}
+				continue
+			}
+		}
+
+		switch {
+		case strings.HasPrefix(line, prefixConfigPath):
+			val := strings.TrimSpace(strings.TrimPrefix(line, prefixConfigPath))
+			if !isNoneValue(val) {
+				res.ConfigFilePath = val
+			}
+		case strings.HasPrefix(line, prefixLoadedFile):
+			val := strings.TrimSpace(strings.TrimPrefix(line, prefixLoadedFile))
+			if isNoneValue(val) {
+				res.LoadedConfigNone = true
+			} else {
+				res.LoadedConfigFile = val
+			}
+		case strings.HasPrefix(line, prefixScanDir):
+			val := strings.TrimSpace(strings.TrimPrefix(line, prefixScanDir))
+			if isNoneValue(val) {
+				res.ScanIniDirNone = true
+			} else {
+				res.ScanIniDir = val
+			}
+		case strings.HasPrefix(line, prefixAdditional):
+			val := strings.TrimSpace(strings.TrimPrefix(line, prefixAdditional))
+			if !isNoneValue(val) {
+				appendCommaSeparatedFiles(&res.AdditionalIniFiles, val)
+				if strings.HasSuffix(val, ",") {
+					inAdditionalIni = true
+				}
+			}
+		}
+	}
+
+	return res
 }
 
 // ParsePHPInfoOutput parses the plain-text output of `php -i`.
@@ -154,23 +225,34 @@ func ParsePHPInfoOutput(out []byte) PHPInfoResult {
 			}
 		}
 
-		if !strings.Contains(line, "=>") {
+		left, right, ok := strings.Cut(line, "=>")
+		if !ok {
 			continue
 		}
 
-		parts := strings.Split(line, "=>")
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
+		key := strings.TrimSpace(left)
+		val := strings.TrimSpace(right)
+		if firstVal, _, hasSecondArrow := strings.Cut(val, "=>"); hasSecondArrow {
+			val = strings.TrimSpace(firstVal)
+		}
 
 		switch key {
 		case "Server API":
 			res.ServerAPI = val
-		case "Loaded Configuration File":
+		case "Configuration File (php.ini) Path":
 			if !isNoneValue(val) {
+				res.ConfigFilePath = val
+			}
+		case "Loaded Configuration File":
+			if isNoneValue(val) {
+				res.LoadedConfigNone = true
+			} else {
 				res.LoadedConfigFile = val
 			}
 		case "Scan this dir for additional .ini files":
-			if !isNoneValue(val) {
+			if isNoneValue(val) {
+				res.ScanIniDirNone = true
+			} else {
 				res.ScanIniDir = val
 			}
 		case "Additional .ini files parsed":
@@ -205,10 +287,12 @@ func isNoneValue(s string) bool {
 }
 
 // ParseIniReader statically parses a php.ini or conf.d/*.ini stream without executing anything,
-// recording tracked directives and their file origin on target.
+// recording tracked directives and their file:line origin on target.
 func ParseIniReader(r io.Reader, sourceLabel string, target *inventory.PHPInstall) error {
 	scanner := bufio.NewScanner(r)
+	lineNum := 0
 	for scanner.Scan() {
+		lineNum++
 		line := stripIniComment(scanner.Text())
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "[") {
@@ -223,7 +307,11 @@ func ParseIniReader(r io.Reader, sourceLabel string, target *inventory.PHPInstal
 			continue
 		}
 		norm := NormalizeIniValue(v)
-		target.SetIniSetting(key, norm, sourceLabel)
+		origin := sourceLabel
+		if lineNum > 0 && !strings.Contains(sourceLabel, ":") {
+			origin = fmt.Sprintf("%s:%d", sourceLabel, lineNum)
+		}
+		target.SetIniSetting(key, norm, origin)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("parse ini %s: %w", sourceLabel, err)
@@ -231,30 +319,104 @@ func ParseIniReader(r io.Reader, sourceLabel string, target *inventory.PHPInstal
 	return nil
 }
 
-// ParseFPMPoolReader statically parses PHP-FPM pool configuration files for
-// php_value, php_admin_value, php_flag, and php_admin_flag directives.
-func ParseFPMPoolReader(r io.Reader, sourceLabel string, target *inventory.PHPInstall) error {
+// FPMPoolSetting represents a single tracked PHP INI override inside an FPM pool section.
+type FPMPoolSetting struct {
+	Pool      string
+	Directive string
+	Key       string
+	Value     string
+	Line      int
+	File      string
+}
+
+// FPMPoolParseResult holds the parsed include patterns, pool sections, and settings from an FPM config file.
+type FPMPoolParseResult struct {
+	Includes []string
+	Pools    []string
+	Settings []FPMPoolSetting
+}
+
+// ParseFPMPoolConfig parses an FPM configuration or pool file for [pool] sections, include= directives,
+// and php_value/php_admin_value/php_flag/php_admin_flag directives with line numbers.
+func ParseFPMPoolConfig(r io.Reader, absPath string) (FPMPoolParseResult, error) {
+	var res FPMPoolParseResult
+	seenPools := make(map[string]bool)
+	addPool := func(name string) {
+		if name == "" || strings.EqualFold(name, "global") {
+			return
+		}
+		if !seenPools[name] {
+			seenPools[name] = true
+			res.Pools = append(res.Pools, name)
+		}
+	}
+
 	scanner := bufio.NewScanner(r)
+	currentSection := ""
+	lineNum := 0
+
 	for scanner.Scan() {
-		line := stripIniComment(scanner.Text())
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "[") {
+		lineNum++
+		line := strings.TrimSpace(stripIniComment(scanner.Text()))
+		if line == "" {
 			continue
 		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			sec := strings.TrimSpace(line[1 : len(line)-1])
+			currentSection = sec
+			addPool(sec)
+			continue
+		}
+
 		lhs, rhs, ok := strings.Cut(line, "=")
 		if !ok {
 			continue
 		}
 		lhs = strings.TrimSpace(lhs)
-		directive, key, ok := parseFPMDirectiveKey(lhs)
-		if !ok || !isTrackedIniKey(key) {
+		rhs = strings.TrimSpace(rhs)
+
+		if strings.EqualFold(lhs, "include") {
+			inc := strings.TrimSpace(strings.Trim(rhs, `"'`))
+			if inc != "" {
+				res.Includes = append(res.Includes, inc)
+			}
 			continue
 		}
+
+		directive, key, okDir := parseFPMDirectiveKey(lhs)
+		if !okDir || !isTrackedIniKey(key) {
+			continue
+		}
+		poolName := currentSection
+		if poolName == "" || strings.EqualFold(poolName, "global") {
+			poolName = "www"
+		}
+		addPool(poolName)
 		norm := NormalizeIniValue(rhs)
-		target.SetIniSetting(key, norm, fmt.Sprintf("%s (%s)", sourceLabel, directive))
+		res.Settings = append(res.Settings, FPMPoolSetting{
+			Pool:      poolName,
+			Directive: directive,
+			Key:       key,
+			Value:     norm,
+			Line:      lineNum,
+			File:      absPath,
+		})
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("parse fpm pool %s: %w", sourceLabel, err)
+		return res, fmt.Errorf("parse fpm pool %s: %w", absPath, err)
+	}
+	return res, nil
+}
+
+// ParseFPMPoolReader statically parses PHP-FPM pool configuration files for
+// php_value, php_admin_value, php_flag, and php_admin_flag directives.
+func ParseFPMPoolReader(r io.Reader, sourceLabel string, target *inventory.PHPInstall) error {
+	res, err := ParseFPMPoolConfig(r, sourceLabel)
+	if err != nil {
+		return err
+	}
+	for _, s := range res.Settings {
+		target.SetIniSetting(s.Key, s.Value, fmt.Sprintf("%s (%s) %s:%d", s.File, s.Directive, s.File, s.Line))
 	}
 	return nil
 }
@@ -265,7 +427,7 @@ func parseFPMDirectiveKey(lhs string) (string, string, bool) {
 	if openIdx <= 0 || closeIdx <= openIdx+1 {
 		return "", "", false
 	}
-	directive := strings.TrimSpace(lhs[:openIdx])
+	directive := strings.ToLower(strings.TrimSpace(lhs[:openIdx]))
 	switch directive {
 	case "php_value", "php_admin_value", "php_flag", "php_admin_flag":
 	default:
@@ -273,6 +435,75 @@ func parseFPMDirectiveKey(lhs string) (string, string, bool) {
 	}
 	key := strings.TrimSpace(lhs[openIdx+1 : closeIdx])
 	return directive, key, key != ""
+}
+
+// ParseApacheConfigReader parses an Apache configuration file (/etc/apache2 or /etc/httpd)
+// for php_admin_value, php_value, php_admin_flag, and php_flag directives.
+func ParseApacheConfigReader(r io.Reader, absPath string, target *inventory.PHPInstall) error {
+	scanner := bufio.NewScanner(r)
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(stripApacheComment(scanner.Text()))
+		if line == "" {
+			continue
+		}
+
+		// Support bracket syntax if used in Apache config, or standard space-separated Apache syntax.
+		if lhs, rhs, ok := strings.Cut(line, "="); ok {
+			if directive, key, okDir := parseFPMDirectiveKey(strings.TrimSpace(lhs)); okDir && isTrackedIniKey(key) {
+				norm := NormalizeIniValue(rhs)
+				target.SetIniSetting(key, norm, fmt.Sprintf("%s (%s) %s:%d", absPath, directive, absPath, lineNum))
+				continue
+			}
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		directive := strings.ToLower(fields[0])
+		switch directive {
+		case "php_value", "php_admin_value", "php_flag", "php_admin_flag":
+		default:
+			continue
+		}
+		key := strings.Trim(fields[1], `"'`)
+		if !isTrackedIniKey(key) {
+			continue
+		}
+		valRaw := ""
+		if len(fields) >= 3 {
+			valRaw = strings.Join(fields[2:], " ")
+		}
+		norm := NormalizeIniValue(valRaw)
+		target.SetIniSetting(key, norm, fmt.Sprintf("%s (%s) %s:%d", absPath, directive, absPath, lineNum))
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("parse apache config %s: %w", absPath, err)
+	}
+	return nil
+}
+
+func stripApacheComment(s string) string {
+	inQuotes := false
+	var quoteChar byte
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if (ch == '"' || ch == '\'') && (i == 0 || s[i-1] != '\\') {
+			if !inQuotes {
+				inQuotes = true
+				quoteChar = ch
+			} else if ch == quoteChar {
+				inQuotes = false
+			}
+			continue
+		}
+		if !inQuotes && ch == '#' {
+			return s[:i]
+		}
+	}
+	return s
 }
 
 func stripIniComment(s string) string {
