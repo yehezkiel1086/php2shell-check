@@ -1,0 +1,4 @@
+Priority: P3
+Title:    No remediation required for /usr/bin/php8.3 (PATCHED)
+Steps:
+  1. No remediation required: installation meets or exceeds the patched version threshold.

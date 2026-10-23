@@ -1,0 +1,14 @@
+Priority: P0
+Title:    [P0] Remediate /usr/sbin/php-fpm8.3 (VULNERABLE, SAPI: fpm)
+Steps:
+  1. Upgrade php8.3-fpm to >= 8.3.35-1+deb12u2 via distro package manager.
+  2. Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):
+     Create drop-in INI file /etc/php/8.3/fpm/conf.d/99-mitigation.ini:
+       session.upload_progress.enabled = 0
+     Alternatively, in FPM pool config (/etc/php/8.3/fpm/pool.d/www.conf):
+       php_admin_value[session.upload_progress.enabled] = 0
+Commands:
+  [Upgrade Debian/Ubuntu package] apt-get install --only-upgrade php8.3-fpm
+Restart Hints:
+  - reload php-fpm (e.g. systemctl reload php8.3-fpm)
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

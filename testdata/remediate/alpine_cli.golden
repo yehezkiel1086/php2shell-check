@@ -1,14 +1,12 @@
 Priority: P2
 Title:    [P2] Remediate /usr/bin/php82 (LIKELY_VULNERABLE, SAPI: cli)
 Steps:
-  1. Upgrade PHP on branch 8.2 to >= 8.2.35.
-  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
-     --- a/php.ini
-     +++ b/php.ini
-     -session.upload_progress.enabled = 1
-     +session.upload_progress.enabled = 0
+  1. No verified Alpine fix is recorded yet; check vendor security trackers for backported package updates.
+  2. Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):
+     Create drop-in INI file /etc/php/conf.d/99-mitigation.ini:
+       session.upload_progress.enabled = 0
 Commands:
-  [Upgrade Alpine package] apk upgrade php82-cli
+  [Upgrade Alpine PHP packages] apk update && apk upgrade php82-cli php82-fpm php82-common
 Restart Hints:
   - reload php-fpm or Apache if web SAPIs share this PHP installation
 Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

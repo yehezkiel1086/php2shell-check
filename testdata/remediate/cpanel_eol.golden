@@ -1,15 +1,12 @@
 Priority: P0
 Title:    [P0] Remediate /opt/cpanel/ea-php74/root/usr/sbin/php-fpm (LIKELY_VULNERABLE, SAPI: fpm)
 Steps:
-  1. Branch 7.4 has no verified upstream fix (EOL/unfixed); migrate to a supported PHP branch such as 8.5 (>= 8.5.12).
-  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
-     --- a/php.ini
-     +++ b/php.ini
-     -session.upload_progress.enabled = 1
-     +session.upload_progress.enabled = 0
-     --- a/pool.d/www.conf
-     +++ b/pool.d/www.conf
-     +php_admin_value[session.upload_progress.enabled] = 0
+  1. Branch 7.4 has no verified upstream fix (EOL/unfixed); major-version migration, needs application testing (target: 8.5 (>= 8.5.12)). Check for vendor or LTS backports, and keep configuration mitigations as a stop-gap.
+  2. Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):
+     Create drop-in INI file /etc/php/conf.d/99-mitigation.ini:
+       session.upload_progress.enabled = 0
+     Alternatively, in FPM pool config (/usr/local/etc/php-fpm.d/www.conf):
+       php_admin_value[session.upload_progress.enabled] = 0
 Commands:
   [Vendor update tooling (cPanel / CloudLinux)] use your vendor's update tooling
 Restart Hints:

@@ -1,0 +1,14 @@
+Priority: P0
+Title:    [P0] Remediate /usr/lib/apache2/modules/libphp.so (VULNERABLE, SAPI: apache2handler)
+Steps:
+  1. Upgrade PHP on branch 8.3 to >= 8.3.36.
+  2. Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):
+     Create drop-in INI file /usr/local/etc/php/conf.d/99-mitigation.ini:
+       session.upload_progress.enabled = 0
+     Alternatively, in Apache configuration:
+       php_admin_flag session.upload_progress.enabled off
+Commands:
+  [Update container base image] bump the base image tag to php:8.3.36-apache
+Restart Hints:
+  - rebuild and redeploy the image, restarting a container does not change PHP baked into the image
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

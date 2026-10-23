@@ -1,0 +1,14 @@
+Priority: P0
+Title:    [P0] Remediate /opt/php/8.3.35/sbin/php-fpm (VULNERABLE, SAPI: fpm)
+Steps:
+  1. Rebuild PHP >= 8.3.36 with the same configure options into a new prefix (for example /opt/php/8.3.36), switch symlinks or service paths, then restart php-fpm.
+  2. Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):
+     Create drop-in INI file /opt/php/8.3.35/etc/conf.d/99-mitigation.ini:
+       session.upload_progress.enabled = 0
+     Alternatively, in FPM pool config (/opt/php/8.3.35/etc/php-fpm.d/www.conf):
+       php_admin_value[session.upload_progress.enabled] = 0
+Commands:
+  [Upgrade source/custom PHP build in /opt/php/8.3.35] rebuild PHP >= 8.3.36 with the same configure options into a new prefix (for example /opt/php/8.3.36), switch symlinks or service paths, then restart php-fpm
+Restart Hints:
+  - reload php-fpm (e.g. systemctl reload php-fpm)
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

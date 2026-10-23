@@ -1,0 +1,10 @@
+Priority: P0
+Title:    [P0] Remediate /usr/local/sbin/php-fpm (VULNERABLE, SAPI: fpm)
+Steps:
+  1. Upgrade PHP on branch 8.3 to >= 8.3.36.
+  2. Temporary configuration mitigation (CVE-2026-109619): already applied via /usr/local/etc/php/conf.d/security.ini:1, still upgrade.
+Commands:
+  [Update container base image] bump the base image tag to php:8.3.36-fpm
+Restart Hints:
+  - rebuild and redeploy the image, restarting a container does not change PHP baked into the image
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

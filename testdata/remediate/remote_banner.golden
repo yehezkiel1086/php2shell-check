@@ -1,0 +1,7 @@
+Priority: P1
+Title:    [P1] Remediate https://example.com/ (LIKELY_VULNERABLE, SAPI: )
+Steps:
+  1. Upgrade PHP on branch 8.3 to >= 8.3.36.
+  2. Extra hardening: set expose_php = Off to suppress X-Powered-By HTTP version banners (banner, may be hidden or spoofed).
+  3. Temporary configuration mitigation (CVE-2026-109619): config mitigation cannot be assessed remotely, run scan local on the host.
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

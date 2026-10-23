@@ -134,10 +134,7 @@ func TestGoldenRemediationByDistroFamily(t *testing.T) {
 			}
 			rec := remediate.Build(finding, adv, remediate.Options{})
 			got := remediate.FormatText(rec)
-			want := readGolden(t, tc.goldenFile)
-			if got != want {
-				t.Fatalf("FormatText mismatch vs %s\ngot:\n%s\nwant:\n%s", tc.goldenFile, got, want)
-			}
+			assertGolden(t, tc.goldenFile, got)
 		})
 	}
 }
@@ -565,4 +562,278 @@ func TestPathModeGoldenAndInvariants(t *testing.T) {
 			t.Errorf("empty title for %+v", inst)
 		}
 	}
+}
+
+func TestRemediationEightCasesAndNegativeAssertions(t *testing.T) {
+	t.Parallel()
+
+	adv := mustLoadSeedAdvisory(t)
+
+	// 1. Official Apache vulnerable image
+	t.Run("official Apache vulnerable image", func(t *testing.T) {
+		t.Parallel()
+		inst := inventory.PHPInstall{
+			ModulePath:      "/usr/lib/apache2/modules/libphp.so",
+			UpstreamVersion: "8.3.35",
+			SAPI:            inventory.SAPIApache2Handler,
+			Source:          inventory.SourceImage,
+			ImageRef:        "php:8.3.35-apache",
+			ImageDigest:     "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875",
+			ConfigFiles:     []string{"/usr/local/etc/php/conf.d/security.ini"},
+			IniSettings:     map[string]string{"session.upload_progress.enabled": "1"},
+		}
+		f := match.Evaluate(inst, adv)
+		rec := remediate.Build(f, adv, remediate.Options{})
+		text := remediate.FormatText(rec)
+
+		// Negative assertion 3: official image drop-in is under conf.d
+		if !strings.Contains(text, "Create drop-in INI file /usr/local/etc/php/conf.d/99-mitigation.ini:") {
+			t.Errorf("expected drop-in under conf.d, got:\n%s", text)
+		}
+		// Negative assertion 5: image scans never print systemctl
+		if strings.Contains(text, "systemctl") {
+			t.Errorf("image scan must never print systemctl:\n%s", text)
+		}
+		// Tag bump must retain variant suffix
+		if !strings.Contains(text, "bump the base image tag to php:8.3.36-apache") {
+			t.Errorf("expected tag with variant suffix php:8.3.36-apache, got:\n%s", text)
+		}
+
+		assertGolden(t, "official_apache_vulnerable_image.golden", text)
+	})
+
+	// 2. Mitigated FPM image
+	t.Run("mitigated FPM image", func(t *testing.T) {
+		t.Parallel()
+		inst := inventory.PHPInstall{
+			BinaryPath:      "/usr/local/sbin/php-fpm",
+			UpstreamVersion: "8.3.35",
+			SAPI:            inventory.SAPIFPM,
+			Source:          inventory.SourceImage,
+			ImageRef:        "php:8.3.35-fpm",
+			ConfigFiles:     []string{"/usr/local/etc/php/conf.d/security.ini"},
+			IniSettings:     map[string]string{"session.upload_progress.enabled": "0"},
+			Evidence: []string{
+				"ini:session.upload_progress.enabled=0 (source: /usr/local/etc/php/conf.d/security.ini:1)",
+			},
+			ConfigEvidence: []string{
+				"ini:session.upload_progress.enabled=0 (source: /usr/local/etc/php/conf.d/security.ini:1)",
+			},
+		}
+		f := match.Evaluate(inst, adv)
+		rec := remediate.Build(f, adv, remediate.Options{})
+		text := remediate.FormatText(rec)
+
+		// Negative assertion 2: mitigated image prints no diff
+		if strings.Contains(text, "---") || strings.Contains(text, "+++") || strings.Contains(text, "Create drop-in") {
+			t.Errorf("mitigated image must not print diff or drop-in creation:\n%s", text)
+		}
+		if !strings.Contains(text, "already applied via /usr/local/etc/php/conf.d/security.ini:1, still upgrade") {
+			t.Errorf("expected already applied text, got:\n%s", text)
+		}
+		// Negative assertion 5: image scans never print systemctl
+		if strings.Contains(text, "systemctl") {
+			t.Errorf("image scan must never print systemctl:\n%s", text)
+		}
+
+		assertGolden(t, "mitigated_fpm_image.golden", text)
+	})
+
+	// 3. Debian apt without DistroFixes
+	t.Run("Debian apt without DistroFixes", func(t *testing.T) {
+		t.Parallel()
+		inst := inventory.PHPInstall{
+			BinaryPath:      "/usr/sbin/php-fpm8.3",
+			UpstreamVersion: "8.3.35",
+			PackageManager:  "deb",
+			PackageName:     "php8.3-fpm",
+			PackageVersion:  "8.3.35-1+deb12u1",
+			Distro:          inventory.Distro{ID: "debian", VersionID: "12"},
+			SAPI:            inventory.SAPIFPM,
+			Source:          inventory.SourceLocal,
+			ConfigFiles:     []string{"/etc/php/8.3/fpm/php.ini", "/etc/php/8.3/fpm/pool.d/www.conf"},
+			IniSettings:     map[string]string{"session.upload_progress.enabled": "1"},
+		}
+		f := match.Evaluate(inst, adv)
+		rec := remediate.Build(f, adv, remediate.Options{})
+		text := remediate.FormatText(rec)
+
+		// Negative assertion 1: distro case has no upstream version number in command lines
+		for _, cmd := range rec.Commands {
+			if strings.Contains(cmd.Text, "8.3.36") {
+				t.Errorf("distro command line must not contain upstream version 8.3.36: %q", cmd.Text)
+			}
+		}
+		if !strings.Contains(text, "No verified Debian fix is recorded yet") {
+			t.Errorf("expected no verified Debian fix notice, got:\n%s", text)
+		}
+		if !strings.Contains(text, "apt-get update && apt-get install --only-upgrade php8.3-cli php8.3-fpm php8.3-common") {
+			t.Errorf("expected related packages command, got:\n%s", text)
+		}
+
+		assertGolden(t, "debian_apt_without_distro_fixes.golden", text)
+	})
+
+	// 4. Debian apt with a verified DistroFixes entry
+	t.Run("Debian apt with a verified DistroFixes entry", func(t *testing.T) {
+		t.Parallel()
+		customAdv := adv
+		customAdv.DistroFixes = []advisory.DistroFix{
+			{
+				Distro:       "debian",
+				Release:      "12",
+				Package:      "php8.3-fpm",
+				FixedVersion: "8.3.35-1+deb12u2",
+				Verified:     true,
+			},
+		}
+		inst := inventory.PHPInstall{
+			BinaryPath:      "/usr/sbin/php-fpm8.3",
+			UpstreamVersion: "8.3.35",
+			PackageManager:  "deb",
+			PackageName:     "php8.3-fpm",
+			PackageVersion:  "8.3.35-1+deb12u1",
+			Distro:          inventory.Distro{ID: "debian", VersionID: "12"},
+			SAPI:            inventory.SAPIFPM,
+			Source:          inventory.SourceLocal,
+			ConfigFiles:     []string{"/etc/php/8.3/fpm/php.ini", "/etc/php/8.3/fpm/pool.d/www.conf"},
+			IniSettings:     map[string]string{"session.upload_progress.enabled": "1"},
+		}
+		f := match.Evaluate(inst, customAdv)
+		rec := remediate.Build(f, customAdv, remediate.Options{})
+		text := remediate.FormatText(rec)
+
+		// Negative assertion 1: distro case has no upstream version number in command lines
+		for _, cmd := range rec.Commands {
+			if strings.Contains(cmd.Text, "8.3.36") {
+				t.Errorf("distro command line must not contain upstream version 8.3.36: %q", cmd.Text)
+			}
+		}
+		if !strings.Contains(text, "Upgrade php8.3-fpm to >= 8.3.35-1+deb12u2 via distro package manager.") {
+			t.Errorf("expected upgrade to verified distro fix, got:\n%s", text)
+		}
+		if !strings.Contains(text, "apt-get install --only-upgrade php8.3-fpm") {
+			t.Errorf("expected apt-get install --only-upgrade php8.3-fpm, got:\n%s", text)
+		}
+
+		assertGolden(t, "debian_apt_with_verified_distro_fix.golden", text)
+	})
+
+	// 5. 7.4 EOL
+	t.Run("7.4 EOL", func(t *testing.T) {
+		t.Parallel()
+		inst := inventory.PHPInstall{
+			BinaryPath:      "/usr/bin/php7.4",
+			UpstreamVersion: "7.4.33",
+			SAPI:            inventory.SAPICLI,
+			Source:          inventory.SourceLocal,
+		}
+		f := match.Evaluate(inst, adv)
+		rec := remediate.Build(f, adv, remediate.Options{})
+		text := remediate.FormatText(rec)
+
+		// Negative assertion 4: 7.4 text contains 'migration' and not 'bump the base image tag'
+		if !strings.Contains(text, "migration") {
+			t.Errorf("7.4 text must contain 'migration':\n%s", text)
+		}
+		if strings.Contains(text, "bump the base image tag") {
+			t.Errorf("7.4 text must not contain 'bump the base image tag':\n%s", text)
+		}
+		if !strings.Contains(text, "stop-gap") {
+			t.Errorf("7.4 text must mention keeping mitigation as stop-gap:\n%s", text)
+		}
+
+		assertGolden(t, "eol_7_4.golden", text)
+	})
+
+	// 6. PATCHED
+	t.Run("PATCHED", func(t *testing.T) {
+		t.Parallel()
+		inst := inventory.PHPInstall{
+			BinaryPath:      "/usr/bin/php8.3",
+			UpstreamVersion: "8.3.36",
+			SAPI:            inventory.SAPICLI,
+			Source:          inventory.SourceLocal,
+		}
+		f := match.Evaluate(inst, adv)
+		rec := remediate.Build(f, adv, remediate.Options{})
+		text := remediate.FormatText(rec)
+
+		if !strings.Contains(text, "No remediation required") {
+			t.Errorf("PATCHED must state 'No remediation required':\n%s", text)
+		}
+		// No mitigation text
+		if strings.Contains(text, "mitigation") || strings.Contains(text, "Mitigation") {
+			t.Errorf("PATCHED must have no mitigation text:\n%s", text)
+		}
+
+		assertGolden(t, "patched.golden", text)
+	})
+
+	// 7. Local source build under /opt with symlinks
+	t.Run("local source build under /opt with symlinks", func(t *testing.T) {
+		t.Parallel()
+		inst := inventory.PHPInstall{
+			BinaryPath:      "/opt/php/8.3.35/sbin/php-fpm",
+			UpstreamVersion: "8.3.35",
+			SAPI:            inventory.SAPIFPM,
+			Source:          inventory.SourceLocal,
+			Evidence: []string{
+				"symlink: /usr/local/sbin/php-fpm -> /opt/php/8.3.35/sbin/php-fpm",
+			},
+			ConfigFiles: []string{
+				"/opt/php/8.3.35/etc/php-fpm.conf",
+				"/opt/php/8.3.35/etc/php-fpm.d/www.conf",
+			},
+			IniSettings: map[string]string{
+				"session.upload_progress.enabled": "1",
+			},
+		}
+		f := match.Evaluate(inst, adv)
+		rec := remediate.Build(f, adv, remediate.Options{})
+		text := remediate.FormatText(rec)
+
+		// Negative assertion 6: /opt build text never contains /usr/local
+		if strings.Contains(text, "/usr/local") {
+			t.Errorf("/opt build text must never contain /usr/local:\n%s", text)
+		}
+		if !strings.Contains(text, "rebuild PHP >= 8.3.36 with the same configure options into a new prefix (for example /opt/php/8.3.36), switch symlinks or service paths, then restart php-fpm") {
+			t.Errorf("missing expected rebuild command, got:\n%s", text)
+		}
+
+		assertGolden(t, "local_source_build_opt_symlinks.golden", text)
+	})
+
+	// 8. Remote banner finding
+	t.Run("remote banner finding", func(t *testing.T) {
+		t.Parallel()
+		inst := inventory.PHPInstall{
+			BinaryPath:      "https://example.com/",
+			UpstreamVersion: "8.3.35",
+			Source:          inventory.SourceRemote,
+		}
+		f := match.Evaluate(inst, adv)
+		rec := remediate.Build(f, adv, remediate.Options{})
+		text := remediate.FormatText(rec)
+
+		// Negative assertion 5: remote scans never print systemctl
+		if strings.Contains(text, "systemctl") {
+			t.Errorf("remote scan must never print systemctl:\n%s", text)
+		}
+		// Negative assertion 7: remote output contains neither 'php.ini' nor 'reload'
+		if strings.Contains(text, "php.ini") {
+			t.Errorf("remote output must not contain 'php.ini':\n%s", text)
+		}
+		if strings.Contains(text, "reload") {
+			t.Errorf("remote output must not contain 'reload':\n%s", text)
+		}
+		if !strings.Contains(text, "config mitigation cannot be assessed remotely, run scan local on the host") {
+			t.Errorf("remote output missing remote config mitigation assessment notice:\n%s", text)
+		}
+		if !strings.Contains(text, "expose_php = Off") {
+			t.Errorf("remote output missing expose_php=Off note:\n%s", text)
+		}
+
+		assertGolden(t, "remote_banner.golden", text)
+	})
 }

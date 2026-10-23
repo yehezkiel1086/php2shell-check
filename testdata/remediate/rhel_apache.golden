@@ -1,16 +1,16 @@
 Priority: P0
 Title:    [P0] Remediate /usr/lib64/httpd/modules/libphp.so (VULNERABLE, SAPI: apache2handler)
 Steps:
-  1. Upgrade PHP on branch 8.5 to >= 8.5.12.
-  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
-     --- a/php.ini
-     +++ b/php.ini
-     -session.upload_progress.enabled = 1
-     +session.upload_progress.enabled = 0
-     -fatal_error_backtraces = 1
-     +fatal_error_backtraces = 0
+  1. No verified Rocky fix is recorded yet; check vendor security trackers for backported package updates.
+  2. Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):
+     Create drop-in INI file /etc/php/conf.d/99-mitigation.ini:
+       session.upload_progress.enabled = 0
+       fatal_error_backtraces = 0
+     Alternatively, in Apache configuration:
+       php_admin_flag session.upload_progress.enabled off
+       php_admin_value fatal_error_backtraces 0
 Commands:
-  [Upgrade RPM package] dnf upgrade php
+  [Upgrade RPM PHP packages] dnf check-update; dnf upgrade php-cli php-fpm php-common
 Restart Hints:
-  - reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)
+  - reload Apache (e.g. systemctl reload httpd)
 Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

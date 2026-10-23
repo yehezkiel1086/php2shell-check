@@ -1,0 +1,10 @@
+Priority: P2
+Title:    [P2] Remediate /usr/bin/php7.4 (LIKELY_VULNERABLE, SAPI: cli)
+Steps:
+  1. Branch 7.4 has no verified upstream fix (EOL/unfixed); major-version migration, needs application testing (target: 8.5 (>= 8.5.12)). Check for vendor or LTS backports, and keep configuration mitigations as a stop-gap.
+  2. Temporary configuration mitigation (CVE-2026-109619): UNKNOWN (config path not found).
+Commands:
+  [Migrate PHP runtime] major-version migration, needs application testing (target: PHP 8.5 >= 8.5.12)
+Restart Hints:
+  - reload php-fpm or Apache if web SAPIs share this PHP installation
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
