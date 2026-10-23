@@ -45,22 +45,15 @@ Image: lab/ubuntu-apt-php8.3:8.3.35  digest: sha256:5a3020ef0516d97297407190151b
 
 #### Recommended Remediation
 
-- Upgrade PHP on branch 8.3 to >= 8.3.36.
-- Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
-
-```diff
---- a/php.ini
-+++ b/php.ini
--session.upload_progress.enabled = 1
-+session.upload_progress.enabled = 0
-```
-
+- No verified Debian fix is recorded yet; check vendor security trackers for backported package updates. Rebuild the layer without cache once updated packages are available.
+- Temporary configuration mitigation (CVE-2026-109619): already applied via /etc/php/8.3/cli/php.ini:1, still upgrade.
 
 **Commands (display only):**
-- Update container base image: `bump the base image tag to 8.3.36`
+- Upgrade Debian/Ubuntu PHP packages: `apt-get update && apt-get install --only-upgrade php8.3-cli php8.3-fpm php8.3-common`
+- Rebuild container layer: `rebuild the layer without cache`
 
 **Restart Hints:**
-- reload php-fpm or Apache if web SAPIs share this PHP installation
+- rebuild and redeploy the image, restarting a container does not change PHP baked into the image
 
 > WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
 
@@ -82,25 +75,15 @@ Image: lab/ubuntu-apt-php8.3:8.3.35  digest: sha256:5a3020ef0516d97297407190151b
 
 #### Recommended Remediation
 
-- Upgrade PHP on branch 8.3 to >= 8.3.36.
-- Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
-
-```diff
---- a/php.ini
-+++ b/php.ini
--session.upload_progress.enabled = 1
-+session.upload_progress.enabled = 0
---- a/pool.d/www.conf
-+++ b/pool.d/www.conf
-+php_admin_value[session.upload_progress.enabled] = 0
-```
-
+- No verified Debian fix is recorded yet; check vendor security trackers for backported package updates. Rebuild the layer without cache once updated packages are available.
+- Temporary configuration mitigation (CVE-2026-109619): already applied via /etc/php/8.3/fpm/pool.d/www.conf (php_admin_value, still upgrade.
 
 **Commands (display only):**
-- Update container base image: `bump the base image tag to 8.3.36`
+- Upgrade Debian/Ubuntu PHP packages: `apt-get update && apt-get install --only-upgrade php8.3-cli php8.3-fpm php8.3-common`
+- Rebuild container layer: `rebuild the layer without cache`
 
 **Restart Hints:**
-- reload php-fpm (e.g. systemctl reload php-fpm)
+- rebuild and redeploy the image, restarting a container does not change PHP baked into the image
 
 > WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
 

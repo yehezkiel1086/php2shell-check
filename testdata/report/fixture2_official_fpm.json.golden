@@ -155,16 +155,16 @@
         "title": "[P0] Remediate /usr/local/sbin/php-fpm (VULNERABLE, SAPI: fpm)",
         "steps": [
           "Upgrade PHP on branch 8.3 to \u003e= 8.3.36.",
-          "Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n--- a/php.ini\n+++ b/php.ini\n-session.upload_progress.enabled = 1\n+session.upload_progress.enabled = 0\n--- a/pool.d/www.conf\n+++ b/pool.d/www.conf\n+php_admin_value[session.upload_progress.enabled] = 0"
+          "Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):\nCreate drop-in INI file /usr/local/etc/php/conf.d/99-mitigation.ini:\n  session.upload_progress.enabled = 0\nAlternatively, in FPM pool config (/etc/php/8.3/fpm/pool.d/www.conf):\n  php_admin_value[session.upload_progress.enabled] = 0"
         ],
         "commands": [
           {
             "label": "Update container base image",
-            "text": "bump the base image tag to 8.3.36"
+            "text": "bump the base image tag to php:8.3.36-fpm"
           }
         ],
         "restart_hints": [
-          "reload php-fpm (e.g. systemctl reload php-fpm)"
+          "rebuild and redeploy the image, restarting a container does not change PHP baked into the image"
         ],
         "notes": "WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required."
       }

@@ -10,30 +10,25 @@ Remediation Guidance:
 Priority: P0
 Title:    [P0] Remediate /usr/sbin/php-fpm8.4 (VULNERABLE, SAPI: fpm)
 Steps:
-  1. Upgrade PHP on branch 8.4 to >= 8.4.27.
-  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
-     --- a/php.ini
-     +++ b/php.ini
-     -session.upload_progress.enabled = 1
-     +session.upload_progress.enabled = 0
-     --- a/pool.d/www.conf
-     +++ b/pool.d/www.conf
-     +php_admin_value[session.upload_progress.enabled] = 0
+  1. Rebuild PHP >= 8.4.27 with the same configure options into a new prefix (for example /usr/local/8.4.27), switch symlinks or service paths, then restart php-fpm.
+  2. Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):
+     Create drop-in INI file /usr/local/etc/conf.d/99-mitigation.ini:
+       session.upload_progress.enabled = 0
+     Alternatively, in FPM pool config (/usr/local/etc/php-fpm.d/www.conf):
+       php_admin_value[session.upload_progress.enabled] = 0
+Commands:
+  [Upgrade source/custom PHP build in /usr/local] rebuild PHP >= 8.4.27 with the same configure options into a new prefix (for example /usr/local/8.4.27), switch symlinks or service paths, then restart php-fpm
 Restart Hints:
-  - reload php-fpm (e.g. systemctl reload php-fpm)
+  - reload php-fpm (e.g. systemctl reload php-fpm8.4)
 Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
 
 Priority: P2
 Title:    [P2] Remediate /usr/bin/php8.3 (LIKELY_VULNERABLE, SAPI: cli)
 Steps:
-  1. Upgrade PHP on branch 8.3 to >= 8.3.36.
-  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
-     --- a/php.ini
-     +++ b/php.ini
-     -session.upload_progress.enabled = 1
-     +session.upload_progress.enabled = 0
+  1. No verified Debian fix is recorded yet; check vendor security trackers for backported package updates.
+  2. Temporary configuration mitigation (CVE-2026-109619): already applied via php -i, still upgrade.
 Commands:
-  [Upgrade Debian/Ubuntu package] apt-get install --only-upgrade php8.3-cli
+  [Upgrade Debian/Ubuntu PHP packages] apt-get update && apt-get install --only-upgrade php8.3-cli php8.3-fpm php8.3-common
 Restart Hints:
   - reload php-fpm or Apache if web SAPIs share this PHP installation
 Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
@@ -42,13 +37,7 @@ Priority: P3
 Title:    Verify PHP installation manually for /usr/lib/apache2/modules/libphp.so
 Steps:
   1. verify manually: inspect the PHP binary version, SAPI configuration, and vendor changelog.
-  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
-     --- a/php.ini
-     +++ b/php.ini
-     -session.upload_progress.enabled = 1
-     +session.upload_progress.enabled = 0
-     -fatal_error_backtraces = 1
-     +fatal_error_backtraces = 0
+  2. Temporary configuration mitigation (CVE-2026-109619): UNKNOWN (config path not found).
 Restart Hints:
   - reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)
 Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
@@ -56,4 +45,4 @@ Notes:    WARNING: A configuration mitigation is a temporary risk reduction only
 Priority: P3
 Title:    No remediation required for /usr/local/bin/php8.5 (PATCHED)
 Steps:
-  1. Installation meets or exceeds the patched version threshold.
+  1. No remediation required: installation meets or exceeds the patched version threshold.

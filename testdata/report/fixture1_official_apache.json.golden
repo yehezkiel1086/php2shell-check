@@ -157,16 +157,16 @@
         "title": "[P0] Remediate /usr/lib/apache2/modules/libphp.so (VULNERABLE, SAPI: apache2handler)",
         "steps": [
           "Upgrade PHP on branch 8.3 to \u003e= 8.3.36.",
-          "Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n--- a/php.ini\n+++ b/php.ini\n-session.upload_progress.enabled = 1\n+session.upload_progress.enabled = 0"
+          "Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):\nCreate drop-in INI file /usr/local/etc/php/conf.d/99-mitigation.ini:\n  session.upload_progress.enabled = 0\nAlternatively, in Apache configuration:\n  php_admin_flag session.upload_progress.enabled off"
         ],
         "commands": [
           {
             "label": "Update container base image",
-            "text": "bump the base image tag to 8.3.36"
+            "text": "bump the base image tag to php:8.3.36-apache"
           }
         ],
         "restart_hints": [
-          "reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)"
+          "rebuild and redeploy the image, restarting a container does not change PHP baked into the image"
         ],
         "notes": "WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required."
       }
@@ -229,16 +229,16 @@
         "title": "[P2] Remediate /usr/local/bin/php (VULNERABLE, SAPI: cli)",
         "steps": [
           "Upgrade PHP on branch 8.3 to \u003e= 8.3.36.",
-          "Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n--- a/php.ini\n+++ b/php.ini\n-session.upload_progress.enabled = 1\n+session.upload_progress.enabled = 0"
+          "Temporary configuration mitigation (applies to CVE-2026-109619 only; not a fix):\nCreate drop-in INI file /usr/local/etc/php/conf.d/99-mitigation.ini:\n  session.upload_progress.enabled = 0"
         ],
         "commands": [
           {
             "label": "Update container base image",
-            "text": "bump the base image tag to 8.3.36"
+            "text": "bump the base image tag to php:8.3.36-apache"
           }
         ],
         "restart_hints": [
-          "reload php-fpm or Apache if web SAPIs share this PHP installation"
+          "rebuild and redeploy the image, restarting a container does not change PHP baked into the image"
         ],
         "notes": "WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required."
       }
