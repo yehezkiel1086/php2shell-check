@@ -15,8 +15,8 @@ import (
 
 // Default byte caps for reading container image layers.
 const (
-	DefaultMaxFileBytes  int64 = 32 * 1024 * 1024  // 32 MiB per file
-	DefaultMaxTotalBytes int64 = 256 * 1024 * 1024 // 256 MiB across all layers
+	DefaultMaxFileBytes  int64 = 128 * 1024 * 1024 // 128 MiB per file
+	DefaultMaxTotalBytes int64 = 512 * 1024 * 1024 // 512 MiB across all layers
 )
 
 // Sentinel errors for unsafe or oversized image layer entries.
@@ -122,6 +122,9 @@ func applyLayerTar(r io.Reader, fs *FlatFS, opts FlattenOptions) error {
 			fs.Symlinks[cleanPath] = hdr.Linkname
 
 		case tar.TypeReg:
+			if !isRelevantImageFile(cleanPath) {
+				continue
+			}
 			if hdr.Size > opts.MaxFileBytes {
 				return fmt.Errorf("file %q (%d bytes > max %d): %w", cleanPath, hdr.Size, opts.MaxFileBytes, ErrFileTooLarge)
 			}
@@ -147,6 +150,68 @@ func applyLayerTar(r io.Reader, fs *FlatFS, opts FlattenOptions) error {
 			fs.Files[cleanPath] = data
 		}
 	}
+}
+
+func isRelevantImageFile(cleanPath string) bool {
+	switch cleanPath {
+	case "etc/os-release",
+		"usr/lib/os-release",
+		"var/lib/dpkg/status",
+		"lib/apk/db/installed",
+		"usr/local/include/php/main/php_version.h",
+		"usr/local/lib/php.ini":
+		return true
+	}
+
+	if strings.HasPrefix(cleanPath, "var/lib/dpkg/status.d/") ||
+		strings.HasPrefix(cleanPath, "var/lib/rpm/") ||
+		strings.HasPrefix(cleanPath, "usr/lib/sysimage/rpm/") {
+		return true
+	}
+
+	lower := strings.ToLower(cleanPath)
+	if strings.HasSuffix(lower, "/php_version.h") {
+		return true
+	}
+
+	if (strings.HasPrefix(lower, "etc/") || strings.HasPrefix(lower, "usr/local/etc/") || strings.HasPrefix(lower, "opt/")) &&
+		(strings.HasSuffix(lower, ".ini") || strings.HasSuffix(lower, ".conf")) {
+		return true
+	}
+
+	base := path.Base(lower)
+	if strings.HasSuffix(base, ".tar.xz") ||
+		strings.HasSuffix(base, ".tar.gz") ||
+		strings.HasSuffix(base, ".tar") ||
+		strings.HasSuffix(base, ".asc") ||
+		strings.HasSuffix(base, ".php") ||
+		strings.HasSuffix(base, ".phpt") ||
+		strings.HasSuffix(base, ".a") ||
+		strings.HasSuffix(base, ".la") {
+		return false
+	}
+
+	inBinOrLibDir := strings.HasPrefix(lower, "bin/") ||
+		strings.HasPrefix(lower, "sbin/") ||
+		strings.HasPrefix(lower, "usr/bin/") ||
+		strings.HasPrefix(lower, "usr/sbin/") ||
+		strings.HasPrefix(lower, "usr/local/bin/") ||
+		strings.HasPrefix(lower, "usr/local/sbin/") ||
+		strings.HasPrefix(lower, "usr/lib/") ||
+		strings.HasPrefix(lower, "usr/lib64/") ||
+		strings.HasPrefix(lower, "usr/libexec/") ||
+		strings.HasPrefix(lower, "usr/local/lib/") ||
+		strings.HasPrefix(lower, "usr/local/libexec/") ||
+		strings.HasPrefix(lower, "opt/")
+
+	if inBinOrLibDir && (strings.HasPrefix(base, "php") ||
+		strings.HasPrefix(base, "frankenphp") ||
+		strings.HasPrefix(base, "lsphp") ||
+		strings.HasPrefix(base, "libphp")) {
+		return true
+	}
+
+	return false
 }
 
 func sanitizeTarPath(raw string) (string, error) {
