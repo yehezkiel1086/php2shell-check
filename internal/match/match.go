@@ -45,13 +45,21 @@ const (
 
 // Finding pairs a discovered PHP installation with its advisory assessment verdict and mitigation state.
 type Finding struct {
-	AdvisoryID string                      `json:"advisory_id"`
-	CVEs       []string                    `json:"cves"`
-	Install    inventory.PHPInstall        `json:"install"`
-	Verdict    Verdict                     `json:"verdict"`
-	Reason     string                      `json:"reason"`
-	FixedIn    string                      `json:"fixed_in,omitempty"`
-	Mitigation map[string]MitigationStatus `json:"mitigation"`
+	AdvisoryID      string                      `json:"advisory_id"`
+	CVEs            []string                    `json:"cves"`
+	Install         inventory.PHPInstall        `json:"install"`
+	Verdict         Verdict                     `json:"verdict"`
+	Reason          string                      `json:"reason"`
+	FixedIn         string                      `json:"fixed_in,omitempty"`
+	Mitigation      map[string]MitigationStatus `json:"mitigation"`
+	ImageRef        string                      `json:"image_ref,omitempty"`
+	ImageDigest     string                      `json:"image_digest,omitempty"`
+	Platform        string                      `json:"platform,omitempty"`
+	ResolvedFromTag bool                        `json:"resolved_from_tag,omitempty"`
+	PackageName     string                      `json:"package_name,omitempty"`
+	PackageVersion  string                      `json:"package_version,omitempty"`
+	VersionEvidence []string                    `json:"version_evidence,omitempty"`
+	ConfigEvidence  []string                    `json:"config_evidence,omitempty"`
 }
 
 // VerdictRank returns the numeric severity priority of a Verdict
@@ -126,19 +134,28 @@ func EvaluateAll(installs []inventory.PHPInstall, adv advisory.Advisory) []Findi
 // Evaluate assesses a single PHPInstall against an Advisory.
 // Mitigation status is computed per CVE and never alters Verdict.
 func Evaluate(inst inventory.PHPInstall, adv advisory.Advisory) Finding {
+	inst.SplitEvidence()
 	cves := append([]string(nil), adv.CVEs...)
 
 	upstreamVer, err := phpver.Parse(inst.UpstreamVersion)
 	if err != nil {
 		reason, fixedIn, hintedBranch := evaluateUnparseableVersion(inst, adv)
 		return Finding{
-			AdvisoryID: adv.ID,
-			CVEs:       cves,
-			Install:    inst,
-			Verdict:    VerdictUnknown,
-			Reason:     reason,
-			FixedIn:    fixedIn,
-			Mitigation: evaluateMitigations(inst, hintedBranch, adv),
+			AdvisoryID:      adv.ID,
+			CVEs:            cves,
+			Install:         inst,
+			Verdict:         VerdictUnknown,
+			Reason:          reason,
+			FixedIn:         fixedIn,
+			Mitigation:      evaluateMitigations(inst, hintedBranch, adv),
+			ImageRef:        inst.ImageRef,
+			ImageDigest:     inst.ImageDigest,
+			Platform:        inst.Platform,
+			ResolvedFromTag: inst.ResolvedFromTag,
+			PackageName:     inst.PackageName,
+			PackageVersion:  inst.PackageVersion,
+			VersionEvidence: inst.VersionEvidence,
+			ConfigEvidence:  inst.ConfigEvidence,
 		}
 	}
 
@@ -154,13 +171,21 @@ func Evaluate(inst inventory.PHPInstall, adv advisory.Advisory) Finding {
 	}
 
 	return Finding{
-		AdvisoryID: adv.ID,
-		CVEs:       cves,
-		Install:    inst,
-		Verdict:    verdict,
-		Reason:     reason,
-		FixedIn:    fixedIn,
-		Mitigation: mitigations,
+		AdvisoryID:      adv.ID,
+		CVEs:            cves,
+		Install:         inst,
+		Verdict:         verdict,
+		Reason:          reason,
+		FixedIn:         fixedIn,
+		Mitigation:      mitigations,
+		ImageRef:        inst.ImageRef,
+		ImageDigest:     inst.ImageDigest,
+		Platform:        inst.Platform,
+		ResolvedFromTag: inst.ResolvedFromTag,
+		PackageName:     inst.PackageName,
+		PackageVersion:  inst.PackageVersion,
+		VersionEvidence: inst.VersionEvidence,
+		ConfigEvidence:  inst.ConfigEvidence,
 	}
 }
 

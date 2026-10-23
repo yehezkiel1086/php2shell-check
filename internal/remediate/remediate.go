@@ -73,6 +73,7 @@ type Command struct {
 type Recommendation struct {
 	Priority     Priority             `json:"priority"`
 	Title        string               `json:"title"`
+	AppliesTo    []string             `json:"applies_to,omitempty"`
 	Steps        []string             `json:"steps,omitempty"`
 	Commands     []Command            `json:"commands,omitempty"`
 	RestartHints []string             `json:"restart_hints,omitempty"`
@@ -492,6 +493,9 @@ func FormatText(rec Recommendation) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Priority: %s\n", rec.Priority)
 	fmt.Fprintf(&b, "Title:    %s\n", rec.Title)
+	if len(rec.AppliesTo) > 0 {
+		fmt.Fprintf(&b, "Applies to: %s\n", strings.Join(rec.AppliesTo, ", "))
+	}
 
 	if len(rec.Steps) > 0 {
 		b.WriteString("Steps:\n")

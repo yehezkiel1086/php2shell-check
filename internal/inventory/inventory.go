@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -64,7 +65,13 @@ type PHPInstall struct {
 	IniSettings     map[string]string `json:"ini_settings,omitempty"`
 	Source          Source            `json:"source"`
 	Confidence      Confidence        `json:"confidence"`
+	ImageRef        string            `json:"image_ref,omitempty"`
+	ImageDigest     string            `json:"image_digest,omitempty"`
+	Platform        string            `json:"platform,omitempty"`
+	ResolvedFromTag bool              `json:"resolved_from_tag,omitempty"`
 	Evidence        []string          `json:"evidence,omitempty"`
+	VersionEvidence []string          `json:"version_evidence,omitempty"`
+	ConfigEvidence  []string          `json:"config_evidence,omitempty"`
 }
 
 // ComputeID returns a deterministic identifier for a PHPInstall based on its
@@ -102,7 +109,112 @@ func (p *PHPInstall) SetIniSetting(key, value, origin string) {
 		p.IniSettings = make(map[string]string)
 	}
 	p.IniSettings[key] = value
-	p.AddEvidence(fmt.Sprintf("ini:%s=%s (source: %s)", key, value, origin))
+	p.AddConfigEvidence(fmt.Sprintf("ini:%s=%s (source: %s)", key, value, origin))
+}
+
+// AddVersionEvidence appends an evidence line to VersionEvidence and Evidence if non-empty.
+func (p *PHPInstall) AddVersionEvidence(ev string) {
+	if ev == "" {
+		return
+	}
+	p.VersionEvidence = append(p.VersionEvidence, ev)
+	p.AddEvidence(ev)
+}
+
+// AddConfigEvidence appends an evidence line to ConfigEvidence and Evidence if non-empty.
+func (p *PHPInstall) AddConfigEvidence(ev string) {
+	if ev == "" {
+		return
+	}
+	p.ConfigEvidence = append(p.ConfigEvidence, ev)
+	p.AddEvidence(ev)
+}
+
+// SplitEvidence populates VersionEvidence and ConfigEvidence from Evidence if both are empty.
+func (p *PHPInstall) SplitEvidence() {
+	if len(p.VersionEvidence) > 0 || len(p.ConfigEvidence) > 0 {
+		return
+	}
+	for _, ev := range p.Evidence {
+		if isVersionEvidenceLine(ev) {
+			p.VersionEvidence = append(p.VersionEvidence, ev)
+		} else {
+			p.ConfigEvidence = append(p.ConfigEvidence, ev)
+		}
+	}
+}
+
+func isVersionEvidenceLine(ev string) bool {
+	lower := strings.ToLower(ev)
+	for _, p := range []string{
+		"php_version_h:",
+		"image_env:",
+		"binary_bytes:",
+		"version_cmd:",
+		"pkg_db:",
+		"source_sbom:",
+		"composer.json:",
+		".php-version:",
+		".tool-versions:",
+		"from ",
+		"image:",
+	} {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+var fullXYZTagRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+`)
+
+// IsFloatingTag reports true when the image reference tag is not a full 3-part semver x.y.z.
+func IsFloatingTag(imageRef string) bool {
+	tag := ExtractTag(imageRef)
+	if tag == "" {
+		return false
+	}
+	return !fullXYZTagRe.MatchString(tag)
+}
+
+// ExtractTag extracts the image tag component from a container image reference.
+// If no tag is present and the ref is not an archive or file path, returns "latest".
+func ExtractTag(imageRef string) string {
+	ref := strings.TrimSpace(imageRef)
+	if ref == "" {
+		return ""
+	}
+	if strings.Contains(ref, `\`) || strings.HasSuffix(ref, ".tar") {
+		return ""
+	}
+	// Strip digest if present
+	refWithoutDigest := strings.Split(ref, "@")[0]
+	lastSlash := strings.LastIndex(refWithoutDigest, "/")
+	remainder := refWithoutDigest
+	if lastSlash != -1 {
+		remainder = refWithoutDigest[lastSlash+1:]
+	}
+	if colonIdx := strings.LastIndex(remainder, ":"); colonIdx != -1 {
+		return remainder[colonIdx+1:]
+	}
+	if isBareHexID(ref) {
+		return ""
+	}
+	return "latest"
+}
+
+func isBareHexID(s string) bool {
+	trimmed := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "sha256:")
+	if len(trimmed) < 12 || len(trimmed) > 64 {
+		return false
+	}
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // NormalizeImageRef strips default Docker Hub library prefixes (such as docker.io/library/,
