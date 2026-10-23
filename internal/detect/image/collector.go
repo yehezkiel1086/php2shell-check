@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -49,7 +51,10 @@ func (c *Collector) Collect(ctx context.Context, target string) ([]inventory.PHP
 		return nil, fmt.Errorf("image collect context: %w", err)
 	}
 
-	img, err := c.loadImage(ctx, target)
+	img, cleanup, err := c.loadImage(ctx, target)
+	if cleanup != nil {
+		defer cleanup()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -57,26 +62,36 @@ func (c *Collector) Collect(ctx context.Context, target string) ([]inventory.PHP
 	return c.InspectImage(ctx, img, target)
 }
 
-func (c *Collector) loadImage(ctx context.Context, target string) (v1.Image, error) {
+func (c *Collector) loadImage(ctx context.Context, target string) (v1.Image, func(), error) {
 	info, statErr := os.Stat(target)
 	if statErr == nil {
 		if info.IsDir() {
-			return loadOCILayoutImage(target)
+			img, err := loadOCILayoutImage(target)
+			return img, nil, err
 		}
 		img, err := tarball.ImageFromPath(target, nil)
 		if err != nil {
-			return nil, fmt.Errorf("load docker tarball %q: %w", target, err)
+			return nil, nil, fmt.Errorf("load docker tarball %q: %w", target, err)
 		}
-		return img, nil
+		return img, nil, nil
+	}
+
+	// Check local Docker daemon (supports local tags like lab/php-8.3.35-mitigated:latest and short/full IDs like 67ae1e29017f).
+	if img, cleanup, ok := loadFromLocalDockerDaemon(ctx, target); ok {
+		return img, cleanup, nil
 	}
 
 	if c.opts.Offline {
-		return nil, fmt.Errorf("load %q: %w", target, ErrOfflineRemoteImage)
+		return nil, nil, fmt.Errorf("load %q: %w", target, ErrOfflineRemoteImage)
+	}
+
+	if isBareHexImageID(target) {
+		return nil, nil, fmt.Errorf("image ID %q not found in local Docker daemon", target)
 	}
 
 	ref, err := name.ParseReference(target)
 	if err != nil {
-		return nil, fmt.Errorf("parse image reference %q: %w", target, err)
+		return nil, nil, fmt.Errorf("parse image reference %q: %w", target, err)
 	}
 
 	img, err := remote.Image(
@@ -85,9 +100,74 @@ func (c *Collector) loadImage(ctx context.Context, target string) (v1.Image, err
 		remote.WithContext(ctx),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("pull remote image %q: %w", target, err)
+		return nil, nil, fmt.Errorf("pull remote image %q: %w", target, err)
 	}
-	return img, nil
+	return img, nil, nil
+}
+
+func loadFromLocalDockerDaemon(ctx context.Context, target string) (v1.Image, func(), bool) {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" || strings.HasPrefix(trimmed, "-") {
+		return nil, nil, false
+	}
+
+	dockerPath, err := exec.LookPath("docker")
+	if err != nil {
+		return nil, nil, false
+	}
+	absDocker, err := filepath.Abs(dockerPath)
+	if err != nil {
+		return nil, nil, false
+	}
+
+	inspectCtx, inspectCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer inspectCancel()
+
+	inspectCmd := exec.CommandContext(inspectCtx, absDocker, "image", "inspect", "--format", "{{.Id}}", "--", trimmed)
+	if runErr := inspectCmd.Run(); runErr != nil {
+		return nil, nil, false
+	}
+
+	tmpFile, err := os.CreateTemp("", "php2shell-docker-image-*.tar")
+	if err != nil {
+		return nil, nil, false
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+
+	cleanup := func() {
+		_ = os.Remove(tmpPath)
+	}
+
+	saveCtx, saveCancel := context.WithTimeout(ctx, 60*time.Second)
+	defer saveCancel()
+
+	saveCmd := exec.CommandContext(saveCtx, absDocker, "image", "save", "-o", tmpPath, "--", trimmed)
+	if saveErr := saveCmd.Run(); saveErr != nil {
+		cleanup()
+		return nil, nil, false
+	}
+
+	img, err := tarball.ImageFromPath(tmpPath, nil)
+	if err != nil {
+		cleanup()
+		return nil, nil, false
+	}
+	return img, cleanup, true
+}
+
+func isBareHexImageID(s string) bool {
+	trimmed := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "sha256:")
+	if len(trimmed) < 12 || len(trimmed) > 64 {
+		return false
+	}
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func loadOCILayoutImage(dirPath string) (v1.Image, error) {
@@ -299,6 +379,17 @@ func (c *Collector) detectSourceBuiltPHP(
 	}
 	parseAllImageStaticConfigs(flat, branch, &inst)
 
+	// In official /usr/local PHP images, if no php.ini or conf.d/*.ini overrode the compiled-in
+	// defaults, record PHP's default values so unmitigated images report NOT_APPLIED rather than UNKNOWN.
+	if _, ok := inst.IniSettings["session.upload_progress.enabled"]; !ok {
+		inst.SetIniSetting("session.upload_progress.enabled", "1", "/usr/local/etc/php (PHP compiled-in default)")
+	}
+	if branch == "8.5" {
+		if _, ok := inst.IniSettings["fatal_error_backtraces"]; !ok {
+			inst.SetIniSetting("fatal_error_backtraces", "1", "/usr/local/etc/php (PHP compiled-in default)")
+		}
+	}
+
 	return inst, true
 }
 
@@ -345,18 +436,26 @@ func (c *Collector) detectPackageManagedPHP(flat *FlatFS, distro inventory.Distr
 }
 
 func parseAllImageStaticConfigs(flat *FlatFS, branch string, inst *inventory.PHPInstall) {
-	// Parse official /usr/local/etc/php configs plus distro /etc/php configs.
+	// Parse active /usr/local/etc/php/php.ini and distro /etc/php configs (never parse inactive php.ini-production templates).
 	iniCandidates := []string{
 		"usr/local/etc/php/php.ini",
-		"usr/local/etc/php/php.ini-production",
 		"etc/php.ini",
 	}
 	if branch != "" {
-		iniCandidates = append(iniCandidates,
-			fmt.Sprintf("etc/php/%s/fpm/php.ini", branch),
-			fmt.Sprintf("etc/php/%s/apache2/php.ini", branch),
-			fmt.Sprintf("etc/php/%s/cli/php.ini", branch),
-		)
+		switch inst.SAPI {
+		case inventory.SAPIFPM:
+			iniCandidates = append(iniCandidates, fmt.Sprintf("etc/php/%s/fpm/php.ini", branch))
+		case inventory.SAPIApache2Handler:
+			iniCandidates = append(iniCandidates, fmt.Sprintf("etc/php/%s/apache2/php.ini", branch))
+		case inventory.SAPICLI:
+			iniCandidates = append(iniCandidates, fmt.Sprintf("etc/php/%s/cli/php.ini", branch))
+		default:
+			iniCandidates = append(iniCandidates,
+				fmt.Sprintf("etc/php/%s/fpm/php.ini", branch),
+				fmt.Sprintf("etc/php/%s/apache2/php.ini", branch),
+				fmt.Sprintf("etc/php/%s/cli/php.ini", branch),
+			)
+		}
 	}
 
 	for _, rel := range iniCandidates {
@@ -372,11 +471,20 @@ func parseAllImageStaticConfigs(flat *FlatFS, branch string, inst *inventory.PHP
 		"etc/php.d/",
 	}
 	if branch != "" {
-		iniPrefixes = append(iniPrefixes,
-			fmt.Sprintf("etc/php/%s/fpm/conf.d/", branch),
-			fmt.Sprintf("etc/php/%s/apache2/conf.d/", branch),
-			fmt.Sprintf("etc/php/%s/cli/conf.d/", branch),
-		)
+		switch inst.SAPI {
+		case inventory.SAPIFPM:
+			iniPrefixes = append(iniPrefixes, fmt.Sprintf("etc/php/%s/fpm/conf.d/", branch))
+		case inventory.SAPIApache2Handler:
+			iniPrefixes = append(iniPrefixes, fmt.Sprintf("etc/php/%s/apache2/conf.d/", branch))
+		case inventory.SAPICLI:
+			iniPrefixes = append(iniPrefixes, fmt.Sprintf("etc/php/%s/cli/conf.d/", branch))
+		default:
+			iniPrefixes = append(iniPrefixes,
+				fmt.Sprintf("etc/php/%s/fpm/conf.d/", branch),
+				fmt.Sprintf("etc/php/%s/apache2/conf.d/", branch),
+				fmt.Sprintf("etc/php/%s/cli/conf.d/", branch),
+			)
+		}
 	}
 
 	for _, pref := range iniPrefixes {
