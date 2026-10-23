@@ -1,0 +1,124 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "php2shell-check",
+          "rules": [
+            {
+              "id": "CVE-2026-109618",
+              "name": "CVE-2026-109618",
+              "shortDescription": {
+                "text": "CVE-2026-109618: PHP2Shell (CVE-2026-109618, CVE-2026-109619)"
+              },
+              "fullDescription": {
+                "text": "PHP engine RCE flaws affecting PHP 5.4.0 through 8.5.11. CVE-2026-109618 has no known config mitigation."
+              },
+              "help": {
+                "text": "Affected PHP range: 5.4.0 through 8.5.11 (inclusive)."
+              }
+            },
+            {
+              "id": "CVE-2026-109619",
+              "name": "CVE-2026-109619",
+              "shortDescription": {
+                "text": "CVE-2026-109619: PHP2Shell (CVE-2026-109618, CVE-2026-109619)"
+              },
+              "fullDescription": {
+                "text": "PHP engine RCE flaws affecting PHP 5.4.0 through 8.5.11. CVE-2026-109618 has no known config mitigation."
+              },
+              "help": {
+                "text": "Affected PHP range: 5.4.0 through 8.5.11 (inclusive)."
+              }
+            }
+          ],
+          "version": "0.1.0-test"
+        }
+      },
+      "results": [
+        {
+          "properties": {
+            "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875"
+          },
+          "ruleId": "CVE-2026-109618",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "[VULNERABLE] CVE-2026-109618 on /usr/lib/apache2/modules/libphp.so (SAPI: apache2handler, version: 8.3.35): upstream version 8.3.35 \u003c branch fix 8.3.36 (mitigation: NONE_AVAILABLE, priority: P0)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "php:8.3.35-apache/usr/lib/apache2/modules/libphp.so"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "properties": {
+            "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875"
+          },
+          "ruleId": "CVE-2026-109619",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "[VULNERABLE] CVE-2026-109619 on /usr/lib/apache2/modules/libphp.so (SAPI: apache2handler, version: 8.3.35): upstream version 8.3.35 \u003c branch fix 8.3.36 (mitigation: NOT_APPLIED, priority: P0)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "php:8.3.35-apache/usr/lib/apache2/modules/libphp.so"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "properties": {
+            "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875"
+          },
+          "ruleId": "CVE-2026-109618",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "[VULNERABLE] CVE-2026-109618 on /usr/local/bin/php (SAPI: cli, version: 8.3.35): upstream version 8.3.35 \u003c branch fix 8.3.36 (mitigation: NONE_AVAILABLE, priority: P2)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "php:8.3.35-apache/usr/local/bin/php"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "properties": {
+            "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875"
+          },
+          "ruleId": "CVE-2026-109619",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "[VULNERABLE] CVE-2026-109619 on /usr/local/bin/php (SAPI: cli, version: 8.3.35): upstream version 8.3.35 \u003c branch fix 8.3.36 (mitigation: NOT_APPLIED, priority: P2)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "php:8.3.35-apache/usr/local/bin/php"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

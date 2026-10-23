@@ -1,0 +1,247 @@
+{
+  "schema_version": "1.1.0",
+  "tool_version": "0.1.0-test",
+  "mode": "image",
+  "image_ref": "php:8.3.35-apache",
+  "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875",
+  "platform": "linux/amd64",
+  "advisory": {
+    "id": "PHP2SHELL-2026",
+    "cves": [
+      "CVE-2026-109618",
+      "CVE-2026-109619"
+    ],
+    "title": "PHP2Shell (CVE-2026-109618, CVE-2026-109619)",
+    "severity": "",
+    "cvss_v4": "",
+    "summary": "PHP engine RCE flaws affecting PHP 5.4.0 through 8.5.11. CVE-2026-109618 has no known config mitigation.",
+    "affected_min": "5.4.0",
+    "affected_max_inclusive": "8.5.11",
+    "branches": [
+      {
+        "branch": "8.5",
+        "fixed_in": "8.5.12",
+        "eol": false,
+        "upstream_fix_available": true,
+        "notes": ""
+      },
+      {
+        "branch": "8.4",
+        "fixed_in": "8.4.27",
+        "eol": false,
+        "upstream_fix_available": true,
+        "notes": ""
+      },
+      {
+        "branch": "8.3",
+        "fixed_in": "8.3.36",
+        "eol": false,
+        "upstream_fix_available": true,
+        "notes": ""
+      },
+      {
+        "branch": "8.2",
+        "fixed_in": "8.2.35",
+        "eol": false,
+        "upstream_fix_available": true,
+        "notes": ""
+      },
+      {
+        "branch": "8.1",
+        "fixed_in": "",
+        "eol": true,
+        "upstream_fix_available": null,
+        "notes": "unclear, vendor backport or upgrade"
+      },
+      {
+        "branch": "8.0",
+        "fixed_in": "",
+        "eol": true,
+        "upstream_fix_available": null,
+        "notes": "unclear, vendor backport or upgrade"
+      },
+      {
+        "branch": "7.4",
+        "fixed_in": "",
+        "eol": true,
+        "upstream_fix_available": null,
+        "notes": "unclear, vendor backport or upgrade"
+      }
+    ],
+    "distro_fixes": [],
+    "mitigations": [
+      {
+        "cve": "CVE-2026-109619",
+        "ini_key": "session.upload_progress.enabled",
+        "recommended_value": "0",
+        "applies_to_branch": "*",
+        "note": "Disable session upload progress"
+      },
+      {
+        "cve": "CVE-2026-109619",
+        "ini_key": "fatal_error_backtraces",
+        "recommended_value": "0",
+        "applies_to_branch": "8.5",
+        "note": "Disable fatal error backtraces on PHP 8.5"
+      }
+    ],
+    "references": [],
+    "last_verified": "",
+    "verified": false
+  },
+  "summary": {
+    "total": 2,
+    "vulnerable": 2,
+    "likely_vulnerable": 0,
+    "unknown": 0,
+    "patched": 0,
+    "highest_verdict": "VULNERABLE"
+  },
+  "results": [
+    {
+      "finding": {
+        "advisory_id": "PHP2SHELL-2026",
+        "cves": [
+          "CVE-2026-109618",
+          "CVE-2026-109619"
+        ],
+        "install": {
+          "id": "image-apache2handler-85c7f6a8c0ee",
+          "module_path": "/usr/lib/apache2/modules/libphp.so",
+          "upstream_version": "8.3.35",
+          "distro": {
+            "id": "debian",
+            "version_id": "12"
+          },
+          "sapi": "apache2handler",
+          "config_files": [
+            "/usr/local/etc/php/conf.d/security.ini"
+          ],
+          "ini_settings": {
+            "session.upload_progress.enabled": "1"
+          },
+          "source": "image",
+          "confidence": "high",
+          "image_ref": "php:8.3.35-apache",
+          "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875",
+          "platform": "linux/amd64",
+          "evidence": [
+            "php_version_h: /usr/local/include/php/main/php_version.h =\u003e 8.3.35",
+            "image_env: PHP_VERSION=8.3.35",
+            "binary_bytes: /usr/local/bin/php =\u003e PHP/8.3.35",
+            "binary_bytes: /usr/lib/apache2/modules/libphp.so =\u003e PHP/8.3.35",
+            "image_cmd: docker-php-entrypoint apache2-foreground",
+            "ini:session.upload_progress.enabled=1 (source: /usr/local/etc/php/conf.d/security.ini:1)",
+            "limitation: .htaccess files are not scanned; per-directory php_value/php_flag overrides may apply"
+          ],
+          "config_evidence": [
+            "ini:session.upload_progress.enabled=1 (source: /usr/local/etc/php/conf.d/security.ini:1)"
+          ]
+        },
+        "verdict": "VULNERABLE",
+        "reason": "upstream version 8.3.35 \u003c branch fix 8.3.36",
+        "fixed_in": "8.3.36",
+        "mitigation": {
+          "CVE-2026-109618": "NONE_AVAILABLE",
+          "CVE-2026-109619": "NOT_APPLIED"
+        },
+        "image_ref": "php:8.3.35-apache",
+        "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875",
+        "platform": "linux/amd64",
+        "config_evidence": [
+          "ini:session.upload_progress.enabled=1 (source: /usr/local/etc/php/conf.d/security.ini:1)"
+        ]
+      },
+      "recommendation": {
+        "priority": "P0",
+        "title": "[P0] Remediate /usr/lib/apache2/modules/libphp.so (VULNERABLE, SAPI: apache2handler)",
+        "steps": [
+          "Upgrade PHP on branch 8.3 to \u003e= 8.3.36.",
+          "Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n--- a/php.ini\n+++ b/php.ini\n-session.upload_progress.enabled = 1\n+session.upload_progress.enabled = 0"
+        ],
+        "commands": [
+          {
+            "label": "Update container base image",
+            "text": "bump the base image tag to 8.3.36"
+          }
+        ],
+        "restart_hints": [
+          "reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)"
+        ],
+        "notes": "WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required."
+      }
+    },
+    {
+      "finding": {
+        "advisory_id": "PHP2SHELL-2026",
+        "cves": [
+          "CVE-2026-109618",
+          "CVE-2026-109619"
+        ],
+        "install": {
+          "id": "image-cli-10c0bcce8414",
+          "binary_path": "/usr/local/bin/php",
+          "upstream_version": "8.3.35",
+          "distro": {
+            "id": "debian",
+            "version_id": "12"
+          },
+          "sapi": "cli",
+          "config_files": [
+            "/usr/local/etc/php/conf.d/security.ini"
+          ],
+          "ini_settings": {
+            "session.upload_progress.enabled": "1"
+          },
+          "source": "image",
+          "confidence": "high",
+          "image_ref": "php:8.3.35-apache",
+          "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875",
+          "platform": "linux/amd64",
+          "evidence": [
+            "php_version_h: /usr/local/include/php/main/php_version.h =\u003e 8.3.35",
+            "image_env: PHP_VERSION=8.3.35",
+            "binary_bytes: /usr/local/bin/php =\u003e PHP/8.3.35",
+            "binary_bytes: /usr/lib/apache2/modules/libphp.so =\u003e PHP/8.3.35",
+            "image_cmd: docker-php-entrypoint apache2-foreground",
+            "ini:session.upload_progress.enabled=1 (source: /usr/local/etc/php/conf.d/security.ini:1)"
+          ],
+          "config_evidence": [
+            "ini:session.upload_progress.enabled=1 (source: /usr/local/etc/php/conf.d/security.ini:1)"
+          ]
+        },
+        "verdict": "VULNERABLE",
+        "reason": "upstream version 8.3.35 \u003c branch fix 8.3.36",
+        "fixed_in": "8.3.36",
+        "mitigation": {
+          "CVE-2026-109618": "NONE_AVAILABLE",
+          "CVE-2026-109619": "NOT_APPLIED"
+        },
+        "image_ref": "php:8.3.35-apache",
+        "image_digest": "sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875",
+        "platform": "linux/amd64",
+        "config_evidence": [
+          "ini:session.upload_progress.enabled=1 (source: /usr/local/etc/php/conf.d/security.ini:1)"
+        ]
+      },
+      "recommendation": {
+        "priority": "P2",
+        "title": "[P2] Remediate /usr/local/bin/php (VULNERABLE, SAPI: cli)",
+        "steps": [
+          "Upgrade PHP on branch 8.3 to \u003e= 8.3.36.",
+          "Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):\n--- a/php.ini\n+++ b/php.ini\n-session.upload_progress.enabled = 1\n+session.upload_progress.enabled = 0"
+        ],
+        "commands": [
+          {
+            "label": "Update container base image",
+            "text": "bump the base image tag to 8.3.36"
+          }
+        ],
+        "restart_hints": [
+          "reload php-fpm or Apache if web SAPIs share this PHP installation"
+        ],
+        "notes": "WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required."
+      }
+    }
+  ]
+}

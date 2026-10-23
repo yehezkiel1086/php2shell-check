@@ -1,0 +1,115 @@
+# PHP2Shell Assessment Report (PHP2SHELL-2026)
+
+- **Tool Version:** `0.1.0-test`
+- **Scan Mode:** `image`
+- **CVEs Assessed:** `CVE-2026-109618`, `CVE-2026-109619`
+- **Advisory Verified:** `false`
+- **Affected Upstream Range:** `5.4.0` through `8.5.11` (inclusive)
+
+## Executive Summary
+
+| Metric | Value |
+| :--- | :--- |
+| Total Installations Discovered | 2 |
+| `VULNERABLE` | 2 |
+| `LIKELY_VULNERABLE` | 0 |
+| `UNKNOWN` | 0 |
+| `PATCHED` | 0 |
+| **Highest Severity Verdict** | `VULNERABLE` |
+
+## Findings Overview
+
+Image: php:8-apache  digest: sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875  platform: linux/amd64
+note: floating tag resolved to PHP 8.3.35 for this digest only, pin the digest in deployments
+
+| Target | SAPI | Version | Verdict | Fixed In | Mitigation | Priority |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `/usr/lib/apache2/modules/libphp.so` | `apache2handler` | `8.3.35` | **`VULNERABLE`** | `8.3.36` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED` | `P0` |
+| `/usr/local/bin/php` | `cli` | `8.3.35` | **`VULNERABLE`** | `8.3.36` | `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED` | `P2` |
+
+## Per-Finding Evidence & Remediation
+
+### 1. `/usr/lib/apache2/modules/libphp.so` (VULNERABLE)
+
+- **Priority:** `P0`
+- **SAPI:** `apache2handler`
+- **Upstream Version:** `8.3.35`
+- **Distribution:** `debian 12`
+- **Reason:** upstream version 8.3.35 < branch fix 8.3.36
+- **Mitigation Status:** `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED`
+
+#### Evidence
+
+- `php_version_h: /usr/local/include/php/main/php_version.h => 8.3.35`
+- `image_env: PHP_VERSION=8.3.35`
+- `binary_bytes: /usr/local/bin/php => PHP/8.3.35`
+- `binary_bytes: /usr/lib/apache2/modules/libphp.so => PHP/8.3.35`
+- `image_cmd: docker-php-entrypoint apache2-foreground`
+- `ini:session.upload_progress.enabled=1 (source: /usr/local/etc/php/conf.d/security.ini:1)`
+- `limitation: .htaccess files are not scanned; per-directory php_value/php_flag overrides may apply`
+
+#### Recommended Remediation
+
+- Upgrade PHP on branch 8.3 to >= 8.3.36.
+- Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+
+```diff
+--- a/php.ini
++++ b/php.ini
+-session.upload_progress.enabled = 1
++session.upload_progress.enabled = 0
+```
+
+
+**Commands (display only):**
+- Update container base image: `bump the base image tag to 8.3.36`
+
+**Restart Hints:**
+- reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)
+
+> WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
+
+### 2. `/usr/local/bin/php` (VULNERABLE)
+
+- **Priority:** `P2`
+- **SAPI:** `cli`
+- **Upstream Version:** `8.3.35`
+- **Distribution:** `debian 12`
+- **Reason:** upstream version 8.3.35 < branch fix 8.3.36
+- **Mitigation Status:** `CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED`
+
+#### Evidence
+
+- `php_version_h: /usr/local/include/php/main/php_version.h => 8.3.35`
+- `image_env: PHP_VERSION=8.3.35`
+- `binary_bytes: /usr/local/bin/php => PHP/8.3.35`
+- `binary_bytes: /usr/lib/apache2/modules/libphp.so => PHP/8.3.35`
+- `image_cmd: docker-php-entrypoint apache2-foreground`
+- `ini:session.upload_progress.enabled=1 (source: /usr/local/etc/php/conf.d/security.ini:1)`
+
+#### Recommended Remediation
+
+- Upgrade PHP on branch 8.3 to >= 8.3.36.
+- Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+
+```diff
+--- a/php.ini
++++ b/php.ini
+-session.upload_progress.enabled = 1
++session.upload_progress.enabled = 0
+```
+
+
+**Commands (display only):**
+- Update container base image: `bump the base image tag to 8.3.36`
+
+**Restart Hints:**
+- reload php-fpm or Apache if web SAPIs share this PHP installation
+
+> WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.
+
+## Limitations & Assessment Notes
+
+- **Read-Only Discovery:** `php2shell-check` performs passive version and configuration inspection without sending exploit payloads or executing untrusted binaries.
+- **Configuration Mitigations:** INI or FPM pool mitigations apply only to `CVE-2026-109619` and never alter the vulnerability verdict. `CVE-2026-109618` has no known configuration mitigation.
+- **Vendor Backports:** When `advisory.verified` is `false` or distribution backport versions are not listed in `distro_fixes`, distro-managed packages below the upstream fix version are reported as `LIKELY_VULNERABLE`.

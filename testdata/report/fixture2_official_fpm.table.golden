@@ -1,0 +1,24 @@
+Image: php:8.3.35-fpm  digest: sha256:f76adccec13ca022dad6a450510acc29527fd64ad8ecb3c41a45b4da5e6d7678  platform: linux/amd64
+TARGET                   SAPI  VERSION  VERDICT     FIXED IN  MITIGATION                                                   REASON
+/usr/local/sbin/php-fpm  fpm   8.3.35   VULNERABLE  8.3.36    CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED  upstream version 8.3.35 < branch fix 8.3.36
+
+Summary: total=1 vulnerable=1 likely_vulnerable=0 unknown=0 patched=0 highest_verdict=VULNERABLE
+
+Remediation Guidance:
+Priority: P0
+Title:    [P0] Remediate /usr/local/sbin/php-fpm (VULNERABLE, SAPI: fpm)
+Steps:
+  1. Upgrade PHP on branch 8.3 to >= 8.3.36.
+  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+     --- a/php.ini
+     +++ b/php.ini
+     -session.upload_progress.enabled = 1
+     +session.upload_progress.enabled = 0
+     --- a/pool.d/www.conf
+     +++ b/pool.d/www.conf
+     +php_admin_value[session.upload_progress.enabled] = 0
+Commands:
+  [Update container base image] bump the base image tag to 8.3.36
+Restart Hints:
+  - reload php-fpm (e.g. systemctl reload php-fpm)
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

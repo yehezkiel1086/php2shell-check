@@ -1,0 +1,25 @@
+Image: php:8-apache  digest: sha256:89a03bfedc5eb575e4aab9acba3ab39b857501afdd8cd1875b0e3c168fd11875  platform: linux/amd64
+note: floating tag resolved to PHP 8.3.35 for this digest only, pin the digest in deployments
+TARGET                              SAPI            VERSION  VERDICT     FIXED IN  MITIGATION                                                   REASON
+/usr/lib/apache2/modules/libphp.so  apache2handler  8.3.35   VULNERABLE  8.3.36    CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED  upstream version 8.3.35 < branch fix 8.3.36
+/usr/local/bin/php                  cli             8.3.35   VULNERABLE  8.3.36    CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=NOT_APPLIED  upstream version 8.3.35 < branch fix 8.3.36
+
+Summary: total=2 vulnerable=2 likely_vulnerable=0 unknown=0 patched=0 highest_verdict=VULNERABLE
+
+Remediation Guidance:
+Priority: P0
+Title:    [P0] Remediate PHP installations (VULNERABLE)
+Applies to: /usr/lib/apache2/modules/libphp.so, /usr/local/bin/php
+Steps:
+  1. Upgrade PHP on branch 8.3 to >= 8.3.36.
+  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+     --- a/php.ini
+     +++ b/php.ini
+     -session.upload_progress.enabled = 1
+     +session.upload_progress.enabled = 0
+Commands:
+  [Update container base image] bump the base image tag to 8.3.36
+Restart Hints:
+  - reload Apache (e.g. systemctl reload apache2 or systemctl reload httpd)
+  - reload php-fpm or Apache if web SAPIs share this PHP installation
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

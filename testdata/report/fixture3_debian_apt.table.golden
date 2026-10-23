@@ -1,0 +1,24 @@
+Image: lab/ubuntu-apt-php8.3:8.3.35  digest: sha256:5a3020ef0516d97297407190151ba63b514d06a6ec0ea140377a2a86ca5c2fde  platform: linux/amd64
+TARGET                SAPI  VERSION  PACKAGE                        VERDICT            FIXED IN                      MITIGATION                                               REASON
+/usr/bin/php8.3       cli   8.3.35   php8.3-cli 2:8.3.35-1+deb12u1  LIKELY_VULNERABLE  unverified (upstream 8.3.36)  CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=APPLIED  upstream version 8.3.35 < 8.3.36 on distro-managed package (backports possible)
+/usr/sbin/php-fpm8.3  fpm   8.3.35   php8.3-fpm 2:8.3.35-1+deb12u1  LIKELY_VULNERABLE  unverified (upstream 8.3.36)  CVE-2026-109618=NONE_AVAILABLE, CVE-2026-109619=APPLIED  upstream version 8.3.35 < 8.3.36 on distro-managed package (backports possible)
+
+Summary: total=2 vulnerable=0 likely_vulnerable=2 unknown=0 patched=0 highest_verdict=LIKELY_VULNERABLE
+
+Remediation Guidance:
+Priority: P0
+Title:    [P0] Remediate PHP installations (LIKELY_VULNERABLE)
+Applies to: /usr/bin/php8.3, /usr/sbin/php-fpm8.3
+Steps:
+  1. Upgrade PHP on branch 8.3 to >= 8.3.36.
+  2. Temporary configuration mitigation diff (applies to CVE-2026-109619 only; not a fix):
+     --- a/php.ini
+     +++ b/php.ini
+     -session.upload_progress.enabled = 1
+     +session.upload_progress.enabled = 0
+Commands:
+  [Update container base image] bump the base image tag to 8.3.36
+Restart Hints:
+  - reload php-fpm or Apache if web SAPIs share this PHP installation
+  - reload php-fpm (e.g. systemctl reload php-fpm)
+Notes:    WARNING: A configuration mitigation is a temporary risk reduction only and is NOT a fix. CVE-2026-109618 has no known configuration mitigation; upgrading PHP is required.

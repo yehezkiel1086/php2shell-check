@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "tool_version": "0.1.0-test",
   "mode": "local",
   "advisory": {
@@ -116,6 +116,12 @@
           "evidence": [
             "version_cmd: /usr/sbin/php-fpm8.4 -v =\u003e 8.4.26",
             "ini:session.upload_progress.enabled=1 (source: /etc/php/8.4/fpm/php.ini)"
+          ],
+          "version_evidence": [
+            "version_cmd: /usr/sbin/php-fpm8.4 -v =\u003e 8.4.26"
+          ],
+          "config_evidence": [
+            "ini:session.upload_progress.enabled=1 (source: /etc/php/8.4/fpm/php.ini)"
           ]
         },
         "verdict": "VULNERABLE",
@@ -124,7 +130,13 @@
         "mitigation": {
           "CVE-2026-109618": "NONE_AVAILABLE",
           "CVE-2026-109619": "NOT_APPLIED"
-        }
+        },
+        "version_evidence": [
+          "version_cmd: /usr/sbin/php-fpm8.4 -v =\u003e 8.4.26"
+        ],
+        "config_evidence": [
+          "ini:session.upload_progress.enabled=1 (source: /etc/php/8.4/fpm/php.ini)"
+        ]
       },
       "recommendation": {
         "priority": "P0",
@@ -166,6 +178,12 @@
           "evidence": [
             "version_cmd: /usr/bin/php8.3 -v =\u003e 8.3.35-1+deb12u1",
             "ini:session.upload_progress.enabled=0 (source: php -i)"
+          ],
+          "version_evidence": [
+            "version_cmd: /usr/bin/php8.3 -v =\u003e 8.3.35-1+deb12u1"
+          ],
+          "config_evidence": [
+            "ini:session.upload_progress.enabled=0 (source: php -i)"
           ]
         },
         "verdict": "LIKELY_VULNERABLE",
@@ -174,7 +192,15 @@
         "mitigation": {
           "CVE-2026-109618": "NONE_AVAILABLE",
           "CVE-2026-109619": "APPLIED"
-        }
+        },
+        "package_name": "php8.3-cli",
+        "package_version": "8.3.35-1+deb12u1",
+        "version_evidence": [
+          "version_cmd: /usr/bin/php8.3 -v =\u003e 8.3.35-1+deb12u1"
+        ],
+        "config_evidence": [
+          "ini:session.upload_progress.enabled=0 (source: php -i)"
+        ]
       },
       "recommendation": {
         "priority": "P2",
@@ -212,6 +238,9 @@
           "confidence": "low",
           "evidence": [
             "permission_denied: open /usr/lib/apache2/modules/libphp.so: permission denied"
+          ],
+          "config_evidence": [
+            "permission_denied: open /usr/lib/apache2/modules/libphp.so: permission denied"
           ]
         },
         "verdict": "UNKNOWN",
@@ -219,7 +248,10 @@
         "mitigation": {
           "CVE-2026-109618": "NONE_AVAILABLE",
           "CVE-2026-109619": "UNKNOWN"
-        }
+        },
+        "config_evidence": [
+          "permission_denied: open /usr/lib/apache2/modules/libphp.so: permission denied"
+        ]
       },
       "recommendation": {
         "priority": "P3",
@@ -251,6 +283,9 @@
           "confidence": "high",
           "evidence": [
             "version_cmd: /usr/local/bin/php8.5 -v =\u003e 8.5.12"
+          ],
+          "version_evidence": [
+            "version_cmd: /usr/local/bin/php8.5 -v =\u003e 8.5.12"
           ]
         },
         "verdict": "PATCHED",
@@ -259,7 +294,10 @@
         "mitigation": {
           "CVE-2026-109618": "NONE_AVAILABLE",
           "CVE-2026-109619": "UNKNOWN"
-        }
+        },
+        "version_evidence": [
+          "version_cmd: /usr/local/bin/php8.5 -v =\u003e 8.5.12"
+        ]
       },
       "recommendation": {
         "priority": "P3",
